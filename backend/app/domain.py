@@ -37,6 +37,13 @@ class AlignmentState(str, Enum):
     CONFLICTING = "CONFLICTING"
 
 
+class ModelStatus(str, Enum):
+    CANDIDATE = "CANDIDATE"
+    VALIDATED = "VALIDATED"
+    ACTIVE = "ACTIVE"
+    REJECTED = "REJECTED"
+
+
 @dataclass
 class StrategyConfig:
     name: str = "EMA-RSI Momentum"

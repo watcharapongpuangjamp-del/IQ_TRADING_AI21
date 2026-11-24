@@ -5,6 +5,7 @@ import re
 from typing import Dict, List
 
 from dataclasses import asdict, replace
+from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -26,6 +27,9 @@ from app.engines.replay_engine import SimulatorReplayEngine
 from app.engines.signal_engine import AISignalEngine
 from app.engines.strategy_engine import StrategySelectionEngine
 from app.engines.technical_analysis import TechnicalAnalysisEngine
+from app.ml.inference import MLSignalInferenceService
+from app.ml.registry import ModelRegistryService
+from app.ml.trainer import ModelTrainer, ValidationGatePolicy
 from app.models import OrderRecordModel, RiskPolicyModel, TradingStateModel
 from app.repositories.historical_candles import HistoricalCandleRepository
 from app.schemas import (
@@ -37,9 +41,11 @@ from app.schemas import (
     HealthResponse,
     MarketIntelligenceResponse,
     ModeSwitchRequest,
+    ModelRegistryItemResponse,
     MultiTimeframeReportSchema,
     OrderSubmitRequest,
     OrderSubmitResponse,
+    PromoteModelRequest,
     ReplayEvaluationResponse,
     ReplayStartRequest,
     ReplayStateResponse,
@@ -48,6 +54,7 @@ from app.schemas import (
     SignalResponse,
     StrategyParameters,
     TradingStateResponse,
+    TrainModelRequest,
 )
 from app.security import verify_bearer_token
 
@@ -68,6 +75,8 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     connector = SimulationConnector(initial_balance=10000.0)
     strategy_engine = StrategySelectionEngine()
     replay_engine = SimulatorReplayEngine()
+    artifacts_dir = Path(settings.model_artifacts_dir)
+    ml_inference = MLSignalInferenceService(artifacts_dir=artifacts_dir)
     execution_engine = TradeExecutionEngine(
         connector=connector,
         allow_live_trading=settings.allow_live_trading,
@@ -85,8 +94,8 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(
         title=settings.app_name,
-        version="2.0.0",
-        description="IQ Trading AI Hybrid FastAPI Backend (Phase 2 Market Intelligence & Multi-Timeframe)",
+        version="3.0.0",
+        description="IQ Trading AI Hybrid FastAPI Backend (Phase 3 AI Signal & ML Calibration)",
         lifespan=lifespan,
     )
 
@@ -94,6 +103,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     application.state.connector = connector
     application.state.strategy_engine = strategy_engine
     application.state.replay_engine = replay_engine
+    application.state.ml_inference = ml_inference
     application.state.execution_engine = execution_engine
     if custom_settings is not None:
         application.dependency_overrides[get_settings] = lambda: custom_settings
@@ -207,6 +217,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     async def get_latest_signal(
         instrument: str = Query(default="EUR/USD", min_length=3, max_length=20),
         timeframe: str = Query(default="1m", pattern=r"^(1m|5m|15m)$"),
+        db: Session = Depends(get_db),
     ) -> SignalResponse:
         if not INSTRUMENT_PATTERN.match(instrument):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid instrument format.")
@@ -220,7 +231,15 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             timeframe=timeframe,
         )
         snapshot = TechnicalAnalysisEngine.analyze(candles, active)
-        result = AISignalEngine.evaluate(candles, snapshot, active)
+        result = ml_inference.infer_signal(
+            db=db,
+            instrument=instrument,
+            timeframe=timeframe,
+            candles_1m=candles,
+            snapshot_1m=snapshot,
+            mtf_report=None,
+            strategy=active,
+        )
         return SignalResponse.from_domain(result)
 
     @application.get(
@@ -255,7 +274,15 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             candles_by_tf={"1m": candles_1m, "5m": candles_5m, "15m": candles_15m},
             strategy=active,
         )
-        signal = AISignalEngine.evaluate_with_mtf(candles_1m, snap_1m, mtf, active)
+        signal = ml_inference.infer_signal(
+            db=db,
+            instrument=instrument,
+            timeframe="1m",
+            candles_1m=candles_1m,
+            snapshot_1m=snap_1m,
+            mtf_report=mtf,
+            strategy=active,
+        )
 
         return MarketIntelligenceResponse(
             instrument=instrument,
@@ -263,6 +290,113 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             mtf_report=MultiTimeframeReportSchema.from_domain(mtf),
             signal=SignalResponse.from_domain(signal),
         )
+
+    @application.post(
+        "/api/v1/ml/train",
+        response_model=ModelRegistryItemResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Machine Learning"],
+    )
+    async def train_ml_model(
+        payload: TrainModelRequest,
+        db: Session = Depends(get_db),
+    ) -> ModelRegistryItemResponse:
+        if not INSTRUMENT_PATTERN.match(payload.instrument):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid instrument format.")
+
+        candles_1m = HistoricalCandleRepository.get_candles(
+            db, payload.instrument, payload.timeframe, limit=payload.total_bars
+        )
+        if len(candles_1m) < payload.total_bars:
+            seeded = await connector.get_candles(
+                instrument=payload.instrument, timeframe=payload.timeframe, limit=payload.total_bars
+            )
+            HistoricalCandleRepository.upsert_candles(db, payload.instrument, payload.timeframe, seeded, source=connector.name)
+            candles_1m = HistoricalCandleRepository.get_candles(
+                db, payload.instrument, payload.timeframe, limit=payload.total_bars
+            )
+
+        active = replace(strategy_engine.get_active_strategy(), instrument=payload.instrument, timeframe=payload.timeframe)
+        gate_policy = ValidationGatePolicy(
+            max_brier_score=payload.max_brier_score,
+            max_ece=payload.max_ece,
+            min_accuracy=payload.min_accuracy,
+        )
+        try:
+            outcome = ModelTrainer.train_and_validate(
+                instrument=payload.instrument,
+                timeframe=payload.timeframe,
+                candles_1m=candles_1m,
+                strategy=active,
+                artifacts_dir=artifacts_dir,
+                algorithm=payload.algorithm,
+                payout_rate=payload.payout_rate,
+                execution_delay_bars=payload.execution_delay_bars,
+                gate_policy=gate_policy,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+        row = ModelRegistryService.record_training_outcome(db, outcome)
+        return ModelRegistryItemResponse.from_orm_model(row)
+
+    @application.get(
+        "/api/v1/ml/models",
+        response_model=List[ModelRegistryItemResponse],
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Machine Learning"],
+    )
+    async def list_ml_models(
+        instrument: str | None = Query(default=None, min_length=3, max_length=20),
+        limit: int = Query(default=50, ge=1, le=200),
+        db: Session = Depends(get_db),
+    ) -> List[ModelRegistryItemResponse]:
+        if instrument is not None and not INSTRUMENT_PATTERN.match(instrument):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid instrument format.")
+        rows = ModelRegistryService.list_models(db, instrument=instrument, limit=limit)
+        return [ModelRegistryItemResponse.from_orm_model(r) for r in rows]
+
+    @application.get(
+        "/api/v1/ml/active",
+        response_model=ModelRegistryItemResponse | None,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Machine Learning"],
+    )
+    async def get_active_ml_model(
+        instrument: str = Query(default="EUR/USD", min_length=3, max_length=20),
+        timeframe: str = Query(default="1m", pattern=r"^(1m|5m|15m)$"),
+        db: Session = Depends(get_db),
+    ) -> ModelRegistryItemResponse | None:
+        if not INSTRUMENT_PATTERN.match(instrument):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid instrument format.")
+        row = ModelRegistryService.get_active_model(db, instrument=instrument, timeframe=timeframe)
+        return ModelRegistryItemResponse.from_orm_model(row) if row is not None else None
+
+    @application.post(
+        "/api/v1/ml/models/{model_id}/promote",
+        response_model=ModelRegistryItemResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Machine Learning"],
+    )
+    async def promote_ml_model(
+        model_id: str,
+        payload: PromoteModelRequest,
+        db: Session = Depends(get_db),
+    ) -> ModelRegistryItemResponse:
+        try:
+            row = ModelRegistryService.promote_model(
+                db=db,
+                model_id=model_id,
+                artifacts_dir=artifacts_dir,
+                owner_confirmed=payload.owner_confirmed,
+            )
+            return ModelRegistryItemResponse.from_orm_model(row)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except (KeyError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     @application.post(
         "/api/v1/replay/start",

@@ -16,6 +16,9 @@ from app.engines.risk_engine import RiskManagementEngine
 from app.engines.signal_engine import AISignalEngine
 from app.engines.strategy_engine import StrategySelectionEngine
 from app.engines.technical_analysis import TechnicalAnalysisEngine
+from app.ml.backtesting import WalkForwardBacktester
+from app.ml.features import FeatureEngineeringEngine
+from app.ml.splitting import ChronologicalSplitter
 
 
 def _build_trending_candles(
@@ -131,7 +134,6 @@ class TestPurePythonEngines(unittest.TestCase):
         self.assertGreaterEqual(aligned_report.alignment_score, 85)
         self.assertEqual(len(aligned_report.timeframe_summaries), 3)
 
-        # Higher timeframes strongly bearish while 1m is bullish -> CONFLICTING -> forced NO_TRADE
         bear_5m = _build_trending_candles(45, step=-0.00025, start_price=1.2000, tf_ms=300_000)
         bear_15m = _build_trending_candles(45, step=-0.00035, start_price=1.2500, tf_ms=900_000)
         conflict_report = MultiTimeframeEngine.evaluate(
@@ -162,6 +164,51 @@ class TestPurePythonEngines(unittest.TestCase):
 
         reset_state = replay.reset()
         self.assertEqual(reset_state.cursor_index, 374)
+
+    def test_feature_engineering_is_strictly_causal(self) -> None:
+        candles = asyncio.run(self.connector.get_candles("EUR/USD", "1m", limit=180))
+        ds_orig = FeatureEngineeringEngine.build_dataset(candles, self.strategy, horizon_bars=1, execution_delay_bars=1)
+
+        # Mutate ONLY the last 5 bars — earlier feature rows must remain bit-for-bit identical
+        mutated = [dict(c) for c in candles]
+        for j in range(-5, 0):
+            mutated[j]["close"] = mutated[j]["close"] * 1.12
+            mutated[j]["high"] = max(mutated[j]["high"], mutated[j]["close"])
+        ds_mut = FeatureEngineeringEngine.build_dataset(mutated, self.strategy, horizon_bars=1, execution_delay_bars=1)
+
+        self.assertEqual(len(ds_orig.features), len(ds_mut.features))
+        self.assertEqual(ds_orig.features[:-10], ds_mut.features[:-10])
+
+    def test_chronological_splitter_and_walk_forward_folds(self) -> None:
+        timestamps = [1_700_000_000_000 + i * 60_000 for i in range(250)]
+        split = ChronologicalSplitter.split_dataset(timestamps)
+        self.assertLess(split.train_end_ts, split.val_start_ts)
+        self.assertLess(split.val_end_ts, split.test_start_ts)
+
+        folds = ChronologicalSplitter.generate_walk_forward_folds(timestamps, n_splits=3, min_train_size=120)
+        self.assertGreaterEqual(len(folds), 2)
+        for fold in folds:
+            self.assertLess(fold.train_end_ts, fold.val_start_ts)
+            self.assertLess(fold.val_end_ts, fold.test_start_ts)
+
+    def test_walk_forward_backtester_metrics_and_no_trade_skips(self) -> None:
+        probs = [0.72, 0.51, 0.25, 0.68, 0.49]
+        y_true = [1, 1, 0, 0, 0]
+        returns = [0.002, 0.001, -0.002, -0.0015, -0.001]
+        report = WalkForwardBacktester.evaluate(
+            probs=probs,
+            y_true=y_true,
+            future_returns=returns,
+            trade_amount=25.0,
+            payout_rate=0.85,
+            entry_threshold=0.55,
+        )
+        self.assertEqual(report.total_predictions, 5)
+        self.assertEqual(report.skipped_signals, 2)  # 0.51 and 0.49 skipped as NO_TRADE
+        self.assertEqual(report.total_trades, 3)
+        self.assertEqual(report.wins, 2)
+        self.assertEqual(report.losses, 1)
+        self.assertLess(report.brier_score, 0.25)
 
     def test_signal_returns_no_trade_when_confidence_threshold_high(self) -> None:
         candles = asyncio.run(self.connector.get_candles("EUR/USD", "1m", limit=80))

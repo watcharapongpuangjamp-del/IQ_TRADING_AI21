@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
@@ -6,6 +7,7 @@ from app.domain import (
     DataQualityReport,
     ExecutionMode,
     MarketRegime,
+    ModelStatus,
     MultiTimeframeReport,
     ReplayState,
     RiskPolicyConfig,
@@ -320,3 +322,65 @@ class TradingStateResponse(BaseModel):
     consecutive_losses: int
     emergency_stopped: bool
     win_rate_pct: float
+
+
+class TrainModelRequest(BaseModel):
+    instrument: str = Field(default="EUR/USD", min_length=3, max_length=20)
+    timeframe: str = Field(default="1m", pattern="^(1m)$")
+    algorithm: str = Field(default="logistic_regression", pattern="^(logistic_regression|hist_gradient_boosting)$")
+    total_bars: int = Field(default=360, ge=220, le=600)
+    payout_rate: float = Field(default=0.85, ge=0.50, le=0.98)
+    execution_delay_bars: int = Field(default=1, ge=0, le=3)
+    max_brier_score: float = Field(default=0.265, ge=0.05, le=0.50)
+    max_ece: float = Field(default=0.20, ge=0.01, le=0.50)
+    min_accuracy: float = Field(default=0.48, ge=0.40, le=0.99)
+
+
+class PromoteModelRequest(BaseModel):
+    owner_confirmed: bool = False
+
+
+class ModelRegistryItemResponse(BaseModel):
+    model_id: str
+    instrument: str
+    timeframe: str
+    algorithm: str
+    status: ModelStatus
+    train_samples: int
+    validation_samples: int
+    test_samples: int
+    out_of_sample_accuracy: float
+    brier_score: float
+    log_loss: float
+    ece: float
+    simulated_trades: int
+    simulated_win_rate: float
+    simulated_net_pnl: float
+    artifact_filename: str
+    validation_notes: str
+    created_at: datetime
+    promoted_at: Optional[datetime] = None
+
+    @classmethod
+    def from_orm_model(cls, row) -> "ModelRegistryItemResponse":
+        return cls(
+            model_id=row.model_id,
+            instrument=row.instrument,
+            timeframe=row.timeframe,
+            algorithm=row.algorithm,
+            status=ModelStatus(row.status),
+            train_samples=row.train_samples,
+            validation_samples=row.validation_samples,
+            test_samples=row.test_samples,
+            out_of_sample_accuracy=row.out_of_sample_accuracy,
+            brier_score=row.brier_score,
+            log_loss=row.log_loss,
+            ece=row.ece,
+            simulated_trades=row.simulated_trades,
+            simulated_win_rate=row.simulated_win_rate,
+            simulated_net_pnl=row.simulated_net_pnl,
+            artifact_filename=row.artifact_filename,
+            validation_notes=row.validation_notes,
+            created_at=row.created_at,
+            promoted_at=row.promoted_at,
+        )

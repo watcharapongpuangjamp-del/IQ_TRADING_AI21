@@ -24,6 +24,7 @@ def client(tmp_path: Path):
         database_url=f"sqlite:///{db_file}",
         allow_live_trading=False,
         api_bearer_token="",
+        model_artifacts_dir=str(tmp_path / "models"),
     )
     app = create_app(custom_settings=settings)
 
@@ -54,6 +55,7 @@ def secured_client(tmp_path: Path):
         database_url=f"sqlite:///{db_file}",
         allow_live_trading=False,
         api_bearer_token="test-secret-token-12345",
+        model_artifacts_dir=str(tmp_path / "models"),
     )
     app = create_app(custom_settings=settings)
 
@@ -145,6 +147,78 @@ def test_simulator_replay_lifecycle(client: TestClient) -> None:
     state_res = client.get("/api/v1/replay/state")
     assert state_res.status_code == 200
     assert state_res.json()["active"] is True
+
+
+def test_ml_training_walk_forward_validation_and_controlled_promotion(client: TestClient) -> None:
+    # 1. Train candidate model with lenient test gate -> VALIDATED, NOT auto-promoted
+    train_res = client.post(
+        "/api/v1/ml/train",
+        json={
+            "instrument": "EUR/USD",
+            "timeframe": "1m",
+            "algorithm": "logistic_regression",
+            "total_bars": 320,
+            "max_brier_score": 0.45,
+            "max_ece": 0.45,
+            "min_accuracy": 0.40,
+        },
+    )
+    assert train_res.status_code == 200
+    model = train_res.json()
+    assert model["status"] == "VALIDATED"
+    assert model["train_samples"] > 0
+    assert model["test_samples"] > 0
+
+    # Active model must still be None before owner promotion
+    active_before = client.get("/api/v1/ml/active", params={"instrument": "EUR/USD", "timeframe": "1m"})
+    assert active_before.status_code == 200
+    assert active_before.json() is None
+
+    # 2. Promoting without owner_confirmed=True is blocked (403)
+    unconfirmed = client.post(
+        f"/api/v1/ml/models/{model['model_id']}/promote",
+        json={"owner_confirmed": False},
+    )
+    assert unconfirmed.status_code == 403
+
+    # 3. Promoting with owner_confirmed=True activates model and powers inference
+    promoted = client.post(
+        f"/api/v1/ml/models/{model['model_id']}/promote",
+        json={"owner_confirmed": True},
+    )
+    assert promoted.status_code == 200
+    assert promoted.json()["status"] == "ACTIVE"
+
+    active_after = client.get("/api/v1/ml/active", params={"instrument": "EUR/USD", "timeframe": "1m"})
+    assert active_after.status_code == 200
+    assert active_after.json()["model_id"] == model["model_id"]
+
+    intel = client.get("/api/v1/market/intelligence", params={"instrument": "EUR/USD"})
+    assert intel.status_code == 200
+    sig = intel.json()["signal"]
+    assert any(model["model_id"] in ev for ev in sig["supporting_evidence"])
+
+
+def test_ml_validation_gate_rejects_failing_model_and_blocks_promotion(client: TestClient) -> None:
+    rejected_res = client.post(
+        "/api/v1/ml/train",
+        json={
+            "instrument": "GBP/USD",
+            "timeframe": "1m",
+            "algorithm": "hist_gradient_boosting",
+            "total_bars": 300,
+            "min_accuracy": 0.99,
+        },
+    )
+    assert rejected_res.status_code == 200
+    rejected = rejected_res.json()
+    assert rejected["status"] == "REJECTED"
+
+    promote_blocked = client.post(
+        f"/api/v1/ml/models/{rejected['model_id']}/promote",
+        json={"owner_confirmed": True},
+    )
+    assert promote_blocked.status_code == 400
 
 
 def test_order_execution_and_idempotency(client: TestClient) -> None:

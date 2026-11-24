@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     allow_live_trading: bool = False
     api_bearer_token: str = ""
     allowed_origins: str = ""
+    model_artifacts_dir: str = "artifacts/models"
 
 
 @lru_cache

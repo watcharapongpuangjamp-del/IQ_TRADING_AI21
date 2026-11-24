@@ -85,3 +85,27 @@ class HistoricalCandleModel(Base):
     volume: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     source: Mapped[str] = mapped_column(String(32), default="simulation", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ModelRegistryModel(Base):
+    __tablename__ = "model_registry"
+
+    model_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    instrument: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    timeframe: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    algorithm: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="CANDIDATE", nullable=False, index=True)
+    train_samples: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    validation_samples: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    test_samples: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    out_of_sample_accuracy: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    brier_score: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    log_loss: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    ece: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    simulated_trades: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    simulated_win_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    simulated_net_pnl: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    artifact_filename: Mapped[str] = mapped_column(String(128), nullable=False)
+    validation_notes: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
