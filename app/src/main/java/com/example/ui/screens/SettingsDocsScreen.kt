@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -20,7 +25,6 @@ import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
-import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Router
@@ -44,10 +48,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.example.model.BackendHealthState
 import com.example.model.ExecutionMode
 import com.example.model.IntegrationSettings
@@ -72,17 +78,34 @@ fun SettingsDocsScreen(
         notifyTrade: Boolean,
         notifyRisk: Boolean,
         notifyDaily: Boolean,
+        enableLocalNotifications: Boolean,
         newBackendToken: String?,
         newTelegramToken: String?
     ) -> Unit,
     onTestBackend: () -> Unit,
     onSendTelegramTest: () -> Unit,
+    onSendLocalNotificationTest: () -> Unit,
     onSyncCloudNow: () -> Unit,
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
+    val context = LocalContext.current
     val currentMode = ExecutionMode.safeValueOf(userProfile?.executionMode)
+
+    var hasNotifPermission by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                    PackageManager.PERMISSION_GRANTED
+            } else true
+        )
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasNotifPermission = granted
+    }
 
     var backendUrl by remember(settings.backendBaseUrl) { mutableStateOf(settings.backendBaseUrl) }
     var wsUrl by remember(settings.backendWsUrl) { mutableStateOf(settings.backendWsUrl) }
@@ -93,6 +116,7 @@ fun SettingsDocsScreen(
     var notifyTrade by remember(settings.notifyOnTradeResult) { mutableStateOf(settings.notifyOnTradeResult) }
     var notifyRisk by remember(settings.notifyOnRiskStop) { mutableStateOf(settings.notifyOnRiskStop) }
     var notifyDaily by remember(settings.notifyDailySummary) { mutableStateOf(settings.notifyDailySummary) }
+    var enableLocalNotif by remember(settings.enableLocalNotifications) { mutableStateOf(settings.enableLocalNotifications) }
 
     LaunchedEffect(settings) {
         if (backendUrl.isEmpty() && settings.backendBaseUrl.isNotEmpty()) backendUrl = settings.backendBaseUrl
@@ -257,10 +281,24 @@ fun SettingsDocsScreen(
                         modifier = Modifier.fillMaxWidth().testTag("telegram_chat_id_input")
                     )
 
+                    CheckOptionRow("แจ้งเตือนบนอุปกรณ์ Android (Local Notification)", enableLocalNotif) { enableLocalNotif = it }
                     CheckOptionRow("แจ้งเตือนเมื่อมีสัญญาณ AI (CALL/PUT)", notifySignal) { notifySignal = it }
                     CheckOptionRow("แจ้งเตือนผลปิดออเดอร์ (WON/LOST)", notifyTrade) { notifyTrade = it }
                     CheckOptionRow("แจ้งเตือนเมื่อ Risk Guard / Emergency Stop ทำงาน", notifyRisk) { notifyRisk = it }
                     CheckOptionRow("แจ้งเตือนสรุป P&L รายวัน", notifyDaily) { notifyDaily = it }
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotifPermission) {
+                        OutlinedButton(
+                            onClick = { permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("request_notif_permission_button")
+                        ) {
+                            Text("อนุญาตสิทธิ์แจ้งเตือนบน Android 13+")
+                        }
+                    }
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -276,6 +314,7 @@ fun SettingsDocsScreen(
                                     notifyTrade,
                                     notifyRisk,
                                     notifyDaily,
+                                    enableLocalNotif,
                                     backendTokenInput.takeIf { it.isNotBlank() },
                                     telegramTokenInput.takeIf { it.isNotBlank() }
                                 )
@@ -296,8 +335,19 @@ fun SettingsDocsScreen(
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.weight(1f).height(48.dp).testTag("test_telegram_button")
                         ) {
-                            Text("ทดสอบส่ง Telegram")
+                            Text("ทดสอบ Telegram")
                         }
+                    }
+
+                    OutlinedButton(
+                        onClick = onSendLocalNotificationTest,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("test_local_notification_button")
+                    ) {
+                        Text("ทดสอบแจ้งเตือนบนมือถือ (Local Notification)")
                     }
                 }
             }

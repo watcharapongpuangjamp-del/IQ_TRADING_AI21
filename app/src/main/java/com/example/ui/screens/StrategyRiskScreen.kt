@@ -37,8 +37,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.model.MlModelSummary
 import com.example.model.RiskPolicy
 import com.example.model.StrategyConfig
+import com.example.ui.components.MlGovernancePanel
 import com.example.ui.theme.LocalTradingColors
 import kotlin.math.roundToInt
 
@@ -46,8 +48,16 @@ import kotlin.math.roundToInt
 fun StrategyRiskScreen(
     strategy: StrategyConfig,
     riskPolicy: RiskPolicy,
+    instrument: String,
+    backendConnected: Boolean,
+    mlModels: List<MlModelSummary>,
+    activeMlModel: MlModelSummary?,
+    isMlBusy: Boolean,
     onSaveStrategy: (StrategyConfig) -> Unit,
     onSaveRiskPolicy: (RiskPolicy) -> Unit,
+    onRefreshMlModels: () -> Unit,
+    onTrainMlModel: (String) -> Unit,
+    onPromoteMlModel: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
@@ -95,14 +105,20 @@ fun StrategyRiskScreen(
             Tab(
                 selected = selectedTab == 0,
                 onClick = { selectedTab = 0 },
-                text = { Text("ปรับแต่งกลยุทธ์", fontWeight = FontWeight.SemiBold) },
+                text = { Text("กลยุทธ์", fontWeight = FontWeight.SemiBold) },
                 modifier = Modifier.testTag("tab_strategy_studio")
             )
             Tab(
                 selected = selectedTab == 1,
                 onClick = { selectedTab = 1 },
-                text = { Text("จุดตัดขาดทุน & Risk", fontWeight = FontWeight.SemiBold) },
+                text = { Text("Risk Gate", fontWeight = FontWeight.SemiBold) },
                 modifier = Modifier.testTag("tab_risk_guardrails")
+            )
+            Tab(
+                selected = selectedTab == 2,
+                onClick = { selectedTab = 2 },
+                text = { Text("ML Models", fontWeight = FontWeight.SemiBold) },
+                modifier = Modifier.testTag("tab_ml_models")
             )
         }
 
@@ -289,7 +305,7 @@ fun StrategyRiskScreen(
                         }
                     }
                 }
-            } else {
+            } else if (selectedTab == 1) {
                 item {
                     Surface(
                         color = tradingColors.surfaceElevated,
@@ -382,6 +398,19 @@ fun StrategyRiskScreen(
                             }
                         }
                     }
+                }
+            } else {
+                item {
+                    MlGovernancePanel(
+                        instrument = instrument,
+                        backendConnected = backendConnected,
+                        mlModels = mlModels,
+                        activeModel = activeMlModel,
+                        isBusy = isMlBusy,
+                        onRefreshModels = onRefreshMlModels,
+                        onTrainModel = onTrainMlModel,
+                        onPromoteModel = onPromoteMlModel
+                    )
                 }
             }
         }

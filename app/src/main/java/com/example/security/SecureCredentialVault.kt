@@ -41,6 +41,7 @@ class SecureCredentialVault(context: Context) {
         val NOTIFY_TRADE = booleanPreferencesKey("notify_trade")
         val NOTIFY_RISK = booleanPreferencesKey("notify_risk")
         val NOTIFY_DAILY = booleanPreferencesKey("notify_daily")
+        val NOTIFY_LOCAL = booleanPreferencesKey("notify_local")
         val HAS_BACKEND_TOKEN = booleanPreferencesKey("has_backend_token")
         val HAS_TELEGRAM_TOKEN = booleanPreferencesKey("has_telegram_token")
     }
@@ -54,6 +55,7 @@ class SecureCredentialVault(context: Context) {
             notifyOnTradeResult = prefs[Keys.NOTIFY_TRADE] ?: true,
             notifyOnRiskStop = prefs[Keys.NOTIFY_RISK] ?: true,
             notifyDailySummary = prefs[Keys.NOTIFY_DAILY] ?: true,
+            enableLocalNotifications = prefs[Keys.NOTIFY_LOCAL] ?: true,
             hasBackendToken = prefs[Keys.HAS_BACKEND_TOKEN] ?: !getBackendToken().isNullOrBlank(),
             hasTelegramToken = prefs[Keys.HAS_TELEGRAM_TOKEN] ?: !getTelegramBotToken().isNullOrBlank()
         )
@@ -68,7 +70,8 @@ class SecureCredentialVault(context: Context) {
         notifyOnRiskStop: Boolean,
         notifyDailySummary: Boolean,
         newBackendToken: String?,
-        newTelegramBotToken: String?
+        newTelegramBotToken: String?,
+        enableLocalNotifications: Boolean = true
     ) {
         if (newBackendToken != null) {
             if (newBackendToken.isBlank()) removeEncryptedSecret(KEY_BACKEND_TOKEN)
@@ -87,6 +90,7 @@ class SecureCredentialVault(context: Context) {
             prefs[Keys.NOTIFY_TRADE] = notifyOnTradeResult
             prefs[Keys.NOTIFY_RISK] = notifyOnRiskStop
             prefs[Keys.NOTIFY_DAILY] = notifyDailySummary
+            prefs[Keys.NOTIFY_LOCAL] = enableLocalNotifications
             prefs[Keys.HAS_BACKEND_TOKEN] = !getBackendToken().isNullOrBlank()
             prefs[Keys.HAS_TELEGRAM_TOKEN] = !getTelegramBotToken().isNullOrBlank()
         }

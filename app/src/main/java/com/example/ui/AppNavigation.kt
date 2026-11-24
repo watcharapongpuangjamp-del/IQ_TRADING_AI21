@@ -66,6 +66,7 @@ import com.example.security.SecureCredentialVault
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.authStateFlow
 import com.example.ui.auth.signOutUser
+import com.example.ui.notifications.TradingNotificationHelper
 import com.example.ui.screens.PnLDashboardScreen
 import com.example.ui.screens.SettingsDocsScreen
 import com.example.ui.screens.StrategyRiskScreen
@@ -166,6 +167,7 @@ private fun AuthenticatedTradingShell(
                     credentialVault = SecureCredentialVault(app),
                     telegramNotifier = TelegramNotifier(),
                     backendClient = BackendConnectorClient(),
+                    notificationHelper = TradingNotificationHelper(app),
                     currentUserId = currentUserId,
                     userDisplayName = displayName,
                     userEmail = email
@@ -191,6 +193,9 @@ private fun AuthenticatedTradingShell(
     val backendHealth by viewModel.backendHealth.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
     val isSyncingCloud by viewModel.isSyncingCloud.collectAsStateWithLifecycle()
+    val mlModels by viewModel.mlModels.collectAsStateWithLifecycle()
+    val activeMlModel by viewModel.activeMlModel.collectAsStateWithLifecycle()
+    val isMlBusy by viewModel.isMlBusy.collectAsStateWithLifecycle()
 
     LaunchedEffect(snackbarMessage) {
         val msg = snackbarMessage
@@ -329,15 +334,27 @@ private fun AuthenticatedTradingShell(
                                 onToggleAutoTrade = viewModel::toggleAutoTrade,
                                 onManualTrade = viewModel::executeManualOrder,
                                 onEmergencyStop = viewModel::triggerEmergencyStop,
-                                onResetEmergencyStop = viewModel::resetEmergencyStop
+                                onResetEmergencyStop = viewModel::resetEmergencyStop,
+                                onStartReplay = viewModel::startReplayMode,
+                                onStepReplay = viewModel::stepReplay,
+                                onResetReplay = viewModel::resetReplay,
+                                onExitReplay = viewModel::exitReplayMode
                             )
                         }
                         composable(NavRoutes.STRATEGY) {
                             StrategyRiskScreen(
                                 strategy = activeStrategy,
                                 riskPolicy = riskPolicy,
+                                instrument = terminalState.selectedInstrument,
+                                backendConnected = backendHealth.connected,
+                                mlModels = mlModels,
+                                activeMlModel = activeMlModel,
+                                isMlBusy = isMlBusy,
                                 onSaveStrategy = viewModel::saveStrategyConfig,
-                                onSaveRiskPolicy = viewModel::saveRiskPolicyConfig
+                                onSaveRiskPolicy = viewModel::saveRiskPolicyConfig,
+                                onRefreshMlModels = viewModel::refreshMlModels,
+                                onTrainMlModel = viewModel::trainMlModel,
+                                onPromoteMlModel = viewModel::promoteMlModel
                             )
                         }
                         composable(NavRoutes.PNL) {
@@ -358,6 +375,7 @@ private fun AuthenticatedTradingShell(
                                 onSaveIntegrations = viewModel::saveIntegrationsAndTestBackend,
                                 onTestBackend = viewModel::testBackendConnection,
                                 onSendTelegramTest = viewModel::sendTelegramTest,
+                                onSendLocalNotificationTest = viewModel::sendLocalNotificationTest,
                                 onSyncCloudNow = viewModel::syncCloudBackupNow,
                                 onSignOut = {
                                     signOutUser(credentialManager, scope)

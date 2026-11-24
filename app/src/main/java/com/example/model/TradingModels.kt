@@ -321,7 +321,92 @@ data class SignalAnalysis(
     val regime: MarketRegime,
     val riskAssessment: String,
     val explanation: String,
-    val expiresAtMillis: Long
+    val expiresAtMillis: Long,
+    val sourceLabel: String = "Local Heuristic"
+)
+
+enum class AlignmentState(val labelTh: String) {
+    ALIGNED_BULLISH("ทุกกรอบเวลาหนุนขาขึ้น"),
+    ALIGNED_BEARISH("ทุกกรอบเวลาหนุนขาลง"),
+    CONFLICT("สัญญาณข้ามกรอบเวลาขัดแย้ง"),
+    NEUTRAL("กรอบเวลายังไม่ชัดเจน");
+
+    companion object {
+        fun safeValueOf(raw: String?): AlignmentState =
+            entries.firstOrNull { it.name == raw } ?: NEUTRAL
+    }
+}
+
+enum class StreamTransportMode(val label: String) {
+    LOCAL_SIMULATION("Built-in Sim"),
+    FASTAPI_REST("FastAPI REST"),
+    FASTAPI_WEBSOCKET("FastAPI WS Live")
+}
+
+data class DataQualitySummary(
+    val valid: Boolean = true,
+    val reason: String = "Passed OHLCV validation",
+    val candleCount: Int = 0,
+    val gapCount: Int = 0,
+    val outlierCount: Int = 0,
+    val duplicateCount: Int = 0
+)
+
+data class TimeframeIntelligenceSummary(
+    val timeframe: String,
+    val trendBias: TradeDirection,
+    val regime: MarketRegime,
+    val rsi: Double,
+    val emaFast: Double,
+    val emaSlow: Double,
+    val smaFast: Double,
+    val smaSlow: Double,
+    val macdHistogram: Double,
+    val trendStrength: Double,
+    val latestClose: Double
+)
+
+data class MultiTimeframeReport(
+    val instrument: String,
+    val primaryTimeframe: String,
+    val alignmentState: AlignmentState,
+    val alignmentScore: Int,
+    val higherTfBias: TradeDirection,
+    val timeframeSummaries: List<TimeframeIntelligenceSummary>,
+    val alignmentNotes: List<String>
+)
+
+data class ReplaySessionState(
+    val active: Boolean = false,
+    val sessionId: String = "",
+    val instrument: String = "EUR/USD",
+    val timeframe: String = "1m",
+    val cursorIndex: Int = 0,
+    val totalBars: Int = 0,
+    val cursorTimestamp: Long = 0L,
+    val isBackendBacked: Boolean = false
+)
+
+data class MlModelSummary(
+    val modelId: String,
+    val instrument: String,
+    val timeframe: String,
+    val algorithm: String,
+    val status: String,
+    val trainSamples: Int,
+    val validationSamples: Int,
+    val testSamples: Int,
+    val outOfSampleAccuracy: Double,
+    val brierScore: Double,
+    val logLoss: Double,
+    val ece: Double,
+    val simulatedTrades: Int,
+    val simulatedWinRate: Double,
+    val simulatedNetPnl: Double,
+    val validationNotes: String,
+    val createdAt: String = "",
+    val promotedAt: String? = null,
+    val isActive: Boolean = false
 )
 
 data class RiskValidationResult(
@@ -354,6 +439,7 @@ data class IntegrationSettings(
     val notifyOnTradeResult: Boolean = true,
     val notifyOnRiskStop: Boolean = true,
     val notifyDailySummary: Boolean = true,
+    val enableLocalNotifications: Boolean = true,
     val hasBackendToken: Boolean = false,
     val hasTelegramToken: Boolean = false
 )

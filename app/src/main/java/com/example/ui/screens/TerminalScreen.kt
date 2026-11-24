@@ -56,6 +56,8 @@ import com.example.model.Timeframe
 import com.example.model.TradeDirection
 import com.example.model.UserProfile
 import com.example.ui.components.CandlestickChartPanel
+import com.example.ui.components.MultiTimeframeIntelligenceCard
+import com.example.ui.components.SimulatorReplayBarCard
 import com.example.ui.theme.LocalTradingColors
 import com.example.viewmodel.TerminalUiState
 
@@ -72,6 +74,10 @@ fun TerminalScreen(
     onManualTrade: (TradeDirection?) -> Unit,
     onEmergencyStop: () -> Unit,
     onResetEmergencyStop: () -> Unit,
+    onStartReplay: () -> Unit,
+    onStepReplay: (Int) -> Unit,
+    onResetReplay: () -> Unit,
+    onExitReplay: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
@@ -116,7 +122,7 @@ fun TerminalScreen(
                                     )
                             )
                             Text(
-                                text = "${mode.label} • ${if (backendConnected) "FastAPI Connected" else "Built-in Sim"}",
+                                text = "${mode.label} • ${terminalState.streamTransport.label}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = if (mode == ExecutionMode.LIVE) tradingColors.warning else tradingColors.cyan
                             )
@@ -229,6 +235,28 @@ fun TerminalScreen(
             )
         }
 
+        // 3b. Historical Simulator Replay Controls (Zero Look-Ahead)
+        item {
+            SimulatorReplayBarCard(
+                replayState = terminalState.replayState,
+                isBusy = terminalState.isReplayBusy,
+                onStartReplay = onStartReplay,
+                onStepReplay = onStepReplay,
+                onResetReplay = onResetReplay,
+                onExitReplay = onExitReplay
+            )
+        }
+
+        // 3c. Multi-Timeframe Confirmation Matrix (1m Primary + 5m/15m Confirmation)
+        if (terminalState.mtfReport != null) {
+            item {
+                MultiTimeframeIntelligenceCard(
+                    mtfReport = terminalState.mtfReport,
+                    dataQuality = terminalState.dataQuality
+                )
+            }
+        }
+
         // 4. AI Signal & Evidence Breakdown Card
         item {
             val signal = terminalState.signalAnalysis
@@ -250,7 +278,7 @@ fun TerminalScreen(
                     ) {
                         Column {
                             Text(
-                                text = "AI SIGNAL INTELLIGENCE",
+                                text = "AI SIGNAL • ${signal?.sourceLabel ?: "Local Heuristic"}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = tradingColors.cyan
                             )

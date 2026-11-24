@@ -109,4 +109,105 @@ class TradingEnginesUnitTest {
         )
         assertTrue(valid.allowed)
     }
+
+    @Test
+    fun backendClient_resolvesWsUrl_andParsesPhase2And3JsonPayloads() {
+        val client = com.example.data.remote.BackendConnectorClient()
+
+        val wsFromHttps = client.resolveWebSocketUrl(
+            baseUrl = "https://iq.example.com/",
+            explicitWsUrl = "",
+            instrument = "EUR/USD",
+            timeframe = "1m"
+        )
+        assertEquals("wss://iq.example.com/ws/market/EUR/USD?timeframe=1m", wsFromHttps)
+
+        val tickJson = """
+            {
+              "type": "tick",
+              "instrument": "EUR/USD",
+              "timeframe": "1m",
+              "payout_rate": 0.85,
+              "candle": {"timestamp": 1700000000000, "open": 1.08, "high": 1.09, "low": 1.07, "close": 1.085, "volume": 120.0}
+            }
+        """.trimIndent()
+        val parsedTick = client.parseWebSocketTick(tickJson)
+        assertEquals("EUR/USD", parsedTick?.instrument)
+        assertEquals(1.085, parsedTick?.candle?.close ?: 0.0, 1e-6)
+
+        val intelJson = """
+            {
+              "instrument": "EUR/USD",
+              "data_quality": {"valid": true, "reason": "Passed OHLCV validation", "candle_count": 120, "gap_count": 0, "outlier_count": 0, "duplicate_count": 0},
+              "mtf_report": {
+                "instrument": "EUR/USD",
+                "primary_timeframe": "1m",
+                "alignment_state": "ALIGNED_BULLISH",
+                "alignment_score": 88,
+                "higher_tf_bias": "CALL",
+                "timeframe_summaries": [
+                  {"timeframe": "1m", "trend_bias": "CALL", "regime": "TRENDING_UP", "rsi": 58.2, "ema_fast": 1.085, "ema_slow": 1.082, "sma_fast": 1.084, "sma_slow": 1.081, "macd_histogram": 0.0004, "trend_strength": 1.4, "latest_close": 1.086}
+                ],
+                "alignment_notes": ["Confirmed by 5m and 15m"]
+              },
+              "signal": {
+                "instrument": "EUR/USD",
+                "timeframe": "1m",
+                "direction": "CALL",
+                "calibrated_probability": 0.64,
+                "confidence_score": 76,
+                "supporting_evidence": ["ML calibrated probability supports CALL"],
+                "contradicting_evidence": [],
+                "market_regime": "TRENDING_UP",
+                "risk_assessment": "OK",
+                "explanation": "ML model prediction",
+                "expires_at_ms": 1700000060000
+              }
+            }
+        """.trimIndent()
+        val parsedIntel = client.parseMarketIntelligenceJson(intelJson)
+        assertEquals(88, parsedIntel?.mtf_report?.alignment_score)
+        assertEquals("FastAPI Calibrated ML", parsedIntel?.signal?.toDomain()?.sourceLabel)
+
+        val modelJson = """
+            {
+              "model_id": "mdl-12345678",
+              "instrument": "EUR/USD",
+              "timeframe": "1m",
+              "algorithm": "logistic_regression",
+              "status": "VALIDATED",
+              "train_samples": 180,
+              "validation_samples": 60,
+              "test_samples": 60,
+              "out_of_sample_accuracy": 0.58,
+              "brier_score": 0.23,
+              "log_loss": 0.65,
+              "ece": 0.06,
+              "simulated_trades": 25,
+              "simulated_win_rate": 0.60,
+              "simulated_net_pnl": 115.0,
+              "validation_notes": "Passed walk-forward gate"
+            }
+        """.trimIndent()
+        val parsedModel = client.parseModelRegistryItemJson(modelJson)?.toDomain()
+        assertEquals("VALIDATED", parsedModel?.status)
+        assertEquals(0.58, parsedModel?.outOfSampleAccuracy ?: 0.0, 1e-6)
+    }
+
+    @Test
+    fun localMultiTimeframeEngine_inspectsQuality_andProducesThreeTimeframes() {
+        val sim = MarketSimulationEngine()
+        val candles1m = sim.generateInitialCandles("EUR/USD", 60, 120)
+        val strategy = StrategyConfig(instrument = "EUR/USD")
+
+        val quality = com.example.engine.MultiTimeframeLocalEngine.inspectDataQuality(candles1m)
+        assertTrue(quality.valid)
+        assertEquals(120, quality.candleCount)
+
+        val mtf = com.example.engine.MultiTimeframeLocalEngine.evaluateLocalMtf("EUR/USD", candles1m, strategy)
+        assertEquals(3, mtf.timeframeSummaries.size)
+        assertEquals("1m", mtf.timeframeSummaries[0].timeframe)
+        assertEquals("5m", mtf.timeframeSummaries[1].timeframe)
+        assertEquals("15m", mtf.timeframeSummaries[2].timeframe)
+    }
 }
