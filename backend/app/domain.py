@@ -30,6 +30,13 @@ class MarketRegime(str, Enum):
     HIGH_VOLATILITY = "HIGH_VOLATILITY"
 
 
+class AlignmentState(str, Enum):
+    ALIGNED_BULLISH = "ALIGNED_BULLISH"
+    ALIGNED_BEARISH = "ALIGNED_BEARISH"
+    MIXED = "MIXED"
+    CONFLICTING = "CONFLICTING"
+
+
 @dataclass
 class StrategyConfig:
     name: str = "EMA-RSI Momentum"
@@ -42,6 +49,8 @@ class StrategyConfig:
     rsi_overbought: int = 70
     ema_fast: int = 9
     ema_slow: int = 21
+    sma_fast: int = 10
+    sma_slow: int = 30
     macd_fast: int = 12
     macd_slow: int = 26
     macd_signal: int = 9
@@ -68,6 +77,8 @@ class TechnicalSnapshot:
     resistance_level: float
     candlestick_pattern: str
     regime: MarketRegime
+    sma_fast: float = 0.0
+    sma_slow: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -84,6 +95,53 @@ class SignalResult:
     explanation: str = ""
     expires_at_ms: int = 0
     technical_snapshot: TechnicalSnapshot | None = None
+
+
+@dataclass(frozen=True)
+class DataQualityReport:
+    valid: bool
+    reason: str
+    candle_count: int
+    gap_count: int = 0
+    outlier_count: int = 0
+    duplicate_count: int = 0
+
+
+@dataclass(frozen=True)
+class TimeframeIntelligence:
+    timeframe: str
+    trend_bias: TradeDirection
+    regime: MarketRegime
+    rsi: float
+    ema_fast: float
+    ema_slow: float
+    sma_fast: float
+    sma_slow: float
+    macd_histogram: float
+    trend_strength: float
+    latest_close: float
+
+
+@dataclass(frozen=True)
+class MultiTimeframeReport:
+    instrument: str
+    primary_timeframe: str
+    alignment_state: AlignmentState
+    alignment_score: int
+    higher_tf_bias: TradeDirection
+    timeframe_summaries: List[TimeframeIntelligence] = field(default_factory=list)
+    alignment_notes: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ReplayState:
+    session_id: str
+    instrument: str
+    timeframe: str
+    cursor_index: int
+    total_bars: int
+    cursor_timestamp: int
+    active: bool
 
 
 @dataclass

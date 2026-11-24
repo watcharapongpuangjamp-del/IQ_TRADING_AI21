@@ -1,9 +1,12 @@
+from dataclasses import replace
 import math
 import time
 from typing import Dict, List
 
 from app.domain import (
+    AlignmentState,
     MarketRegime,
+    MultiTimeframeReport,
     SignalResult,
     StrategyConfig,
     TechnicalSnapshot,
@@ -12,7 +15,7 @@ from app.domain import (
 
 
 class AISignalEngine:
-    """Evaluates technical evidence and returns calibrated CALL / PUT / NO_TRADE signals."""
+    """Evaluates technical and multi-timeframe evidence to return calibrated CALL / PUT / NO_TRADE signals."""
 
     @staticmethod
     def evaluate(
@@ -32,6 +35,14 @@ class AISignalEngine:
         elif snapshot.ema_fast < snapshot.ema_slow:
             bear_pts += 22.0
             bear_evidence.append(f"EMA{strategy.ema_fast} < EMA{strategy.ema_slow} bearish alignment")
+
+        if snapshot.sma_fast > 0 and snapshot.sma_slow > 0:
+            if snapshot.sma_fast > snapshot.sma_slow:
+                bull_pts += 10.0
+                bull_evidence.append(f"SMA{strategy.sma_fast} > SMA{strategy.sma_slow} supportive trend")
+            elif snapshot.sma_fast < snapshot.sma_slow:
+                bear_pts += 10.0
+                bear_evidence.append(f"SMA{strategy.sma_fast} < SMA{strategy.sma_slow} bearish trend")
 
         if snapshot.rsi <= strategy.rsi_oversold:
             bull_pts += 24.0
@@ -106,4 +117,63 @@ class AISignalEngine:
             explanation=explanation,
             expires_at_ms=int(time.time() * 1000) + strategy.expiry_seconds * 1000,
             technical_snapshot=snapshot,
+        )
+
+    @classmethod
+    def evaluate_with_mtf(
+        cls,
+        candles_1m: List[Dict[str, float]],
+        snapshot_1m: TechnicalSnapshot,
+        mtf_report: MultiTimeframeReport,
+        strategy: StrategyConfig,
+    ) -> SignalResult:
+        base = cls.evaluate(candles_1m, snapshot_1m, strategy)
+        supporting = list(base.supporting_evidence)
+        contradicting = list(base.contradicting_evidence)
+        confidence = base.confidence_score
+        direction = base.direction
+
+        if (
+            direction == TradeDirection.CALL
+            and mtf_report.alignment_state == AlignmentState.ALIGNED_BULLISH
+        ) or (
+            direction == TradeDirection.PUT
+            and mtf_report.alignment_state == AlignmentState.ALIGNED_BEARISH
+        ):
+            confidence = min(96, confidence + 6)
+            supporting.append(f"Multi-timeframe aligned ({mtf_report.alignment_state.value}, score {mtf_report.alignment_score})")
+        elif mtf_report.alignment_state == AlignmentState.CONFLICTING:
+            confidence = max(10, confidence - 18)
+            contradicting.append("Higher timeframes (5m/15m) oppose primary 1m direction")
+            direction = TradeDirection.NO_TRADE
+        elif mtf_report.higher_tf_bias != TradeDirection.NO_TRADE and direction != TradeDirection.NO_TRADE:
+            if mtf_report.higher_tf_bias != direction:
+                confidence = max(10, confidence - 10)
+                contradicting.append(f"Higher-timeframe bias ({mtf_report.higher_tf_bias.value}) differs from {direction.value}")
+                if confidence < strategy.min_confidence:
+                    direction = TradeDirection.NO_TRADE
+
+        logistic = 1.0 / (1.0 + math.exp(-(confidence - 55.0) / 18.0))
+        calibrated_prob = round(min(0.71, max(0.46, 0.46 + logistic * 0.25)), 4)
+
+        explanation = (
+            f"{direction.value} [MTF {mtf_report.alignment_state.value}]: {'; '.join(supporting[:2])}"
+            if direction != TradeDirection.NO_TRADE
+            else f"NO_TRADE [MTF {mtf_report.alignment_state.value}]: Blocked by confidence ({confidence}%) or higher-TF conflict"
+        )
+        risk_assessment = (
+            "Multi-timeframe gate blocked execution (NO_TRADE)."
+            if direction == TradeDirection.NO_TRADE
+            else "Multi-timeframe aligned; subject to independent RiskManagementEngine pre-trade validation."
+        )
+
+        return replace(
+            base,
+            direction=direction,
+            confidence_score=confidence,
+            calibrated_probability=calibrated_prob,
+            supporting_evidence=supporting,
+            contradicting_evidence=contradicting,
+            explanation=explanation,
+            risk_assessment=risk_assessment,
         )

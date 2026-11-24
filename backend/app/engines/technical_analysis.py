@@ -1,17 +1,25 @@
 import math
 from typing import Dict, List, Tuple
 
-from app.domain import MarketRegime, StrategyConfig, TechnicalSnapshot
+from app.domain import (
+    MarketRegime,
+    StrategyConfig,
+    TechnicalSnapshot,
+    TimeframeIntelligence,
+    TradeDirection,
+)
 
 
 class TechnicalAnalysisEngine:
-    """Computes technical indicators (RSI, MACD, EMA, Bollinger Bands, ATR, Candlestick patterns)."""
+    """Computes technical indicators (RSI, MACD, EMA, SMA, Bollinger Bands, ATR, Candlestick patterns)."""
 
     @classmethod
     def analyze(cls, candles: List[Dict[str, float]], strategy: StrategyConfig) -> TechnicalSnapshot:
         closes = [float(c["close"]) for c in candles]
         ema_fast_series = cls.calculate_ema(closes, strategy.ema_fast)
         ema_slow_series = cls.calculate_ema(closes, strategy.ema_slow)
+        sma_fast_series = cls.calculate_sma(closes, strategy.sma_fast)
+        sma_slow_series = cls.calculate_sma(closes, strategy.sma_slow)
         rsi_series = cls.calculate_rsi(closes, strategy.rsi_period)
         macd_line, macd_sig, macd_hist = cls.calculate_macd(
             closes, strategy.macd_fast, strategy.macd_slow, strategy.macd_signal
@@ -24,6 +32,8 @@ class TechnicalAnalysisEngine:
         last_close = closes[-1]
         ema_fast = ema_fast_series[-1]
         ema_slow = ema_slow_series[-1]
+        sma_fast = sma_fast_series[-1]
+        sma_slow = sma_slow_series[-1]
         volatility_pct = (atr / last_close) * 100.0 if last_close > 0 else 0.0
         spread_pct = ((ema_fast - ema_slow) / ema_slow) * 100.0 if ema_slow > 0 else 0.0
         trend_strength = min(3.0, max(0.0, abs(spread_pct) / max(volatility_pct, 0.01)))
@@ -42,6 +52,8 @@ class TechnicalAnalysisEngine:
             macd_histogram=round(macd_hist[-1], 6),
             ema_fast=round(ema_fast, 6),
             ema_slow=round(ema_slow, 6),
+            sma_fast=round(sma_fast, 6),
+            sma_slow=round(sma_slow, 6),
             bb_upper=round(bb_upper[-1], 6),
             bb_middle=round(bb_middle[-1], 6),
             bb_lower=round(bb_lower[-1], 6),
@@ -53,6 +65,69 @@ class TechnicalAnalysisEngine:
             candlestick_pattern=pattern,
             regime=regime,
         )
+
+    @classmethod
+    def summarize_timeframe(
+        cls,
+        candles: List[Dict[str, float]],
+        timeframe: str,
+        strategy: StrategyConfig,
+    ) -> TimeframeIntelligence:
+        snap = cls.analyze(candles, strategy)
+        latest_close = float(candles[-1]["close"])
+
+        bull_score = 0
+        bear_score = 0
+        if snap.ema_fast > snap.ema_slow:
+            bull_score += 2
+        elif snap.ema_fast < snap.ema_slow:
+            bear_score += 2
+
+        if snap.sma_fast > snap.sma_slow:
+            bull_score += 1
+        elif snap.sma_fast < snap.sma_slow:
+            bear_score += 1
+
+        if snap.macd_histogram > 0:
+            bull_score += 1
+        elif snap.macd_histogram < 0:
+            bear_score += 1
+
+        if bull_score >= 3 and snap.rsi < strategy.rsi_overbought:
+            bias = TradeDirection.CALL
+        elif bear_score >= 3 and snap.rsi > strategy.rsi_oversold:
+            bias = TradeDirection.PUT
+        elif snap.regime == MarketRegime.TRENDING_UP:
+            bias = TradeDirection.CALL
+        elif snap.regime == MarketRegime.TRENDING_DOWN:
+            bias = TradeDirection.PUT
+        else:
+            bias = TradeDirection.NO_TRADE
+
+        return TimeframeIntelligence(
+            timeframe=timeframe,
+            trend_bias=bias,
+            regime=snap.regime,
+            rsi=snap.rsi,
+            ema_fast=snap.ema_fast,
+            ema_slow=snap.ema_slow,
+            sma_fast=snap.sma_fast,
+            sma_slow=snap.sma_slow,
+            macd_histogram=snap.macd_histogram,
+            trend_strength=snap.trend_strength,
+            latest_close=round(latest_close, 6),
+        )
+
+    @staticmethod
+    def calculate_sma(values: List[float], period: int) -> List[float]:
+        if not values:
+            return []
+        p = max(1, period)
+        out: List[float] = []
+        for i in range(len(values)):
+            window = values[max(0, i - p + 1) : i + 1]
+            out.append(sum(window) / len(window))
+        return out
 
     @staticmethod
     def calculate_ema(values: List[float], period: int) -> List[float]:

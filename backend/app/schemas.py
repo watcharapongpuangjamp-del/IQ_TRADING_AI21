@@ -2,12 +2,17 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 from app.domain import (
+    AlignmentState,
+    DataQualityReport,
     ExecutionMode,
     MarketRegime,
+    MultiTimeframeReport,
+    ReplayState,
     RiskPolicyConfig,
     SignalResult,
     StrategyConfig,
     TechnicalSnapshot,
+    TimeframeIntelligence,
     TradeDirection,
     TradeStatus,
 )
@@ -41,6 +46,8 @@ class StrategyParameters(BaseModel):
     rsi_overbought: int = Field(default=70, ge=55, le=95)
     ema_fast: int = Field(default=9, ge=2, le=50)
     ema_slow: int = Field(default=21, ge=5, le=200)
+    sma_fast: int = Field(default=10, ge=2, le=100)
+    sma_slow: int = Field(default=30, ge=5, le=200)
     macd_fast: int = Field(default=12, ge=2, le=50)
     macd_slow: int = Field(default=26, ge=5, le=100)
     macd_signal: int = Field(default=9, ge=2, le=50)
@@ -59,6 +66,8 @@ class TechnicalSnapshotSchema(BaseModel):
     macd_histogram: float
     ema_fast: float
     ema_slow: float
+    sma_fast: float = 0.0
+    sma_slow: float = 0.0
     bb_upper: float
     bb_middle: float
     bb_lower: float
@@ -79,6 +88,8 @@ class TechnicalSnapshotSchema(BaseModel):
             macd_histogram=snap.macd_histogram,
             ema_fast=snap.ema_fast,
             ema_slow=snap.ema_slow,
+            sma_fast=snap.sma_fast,
+            sma_slow=snap.sma_slow,
             bb_upper=snap.bb_upper,
             bb_middle=snap.bb_middle,
             bb_lower=snap.bb_lower,
@@ -123,6 +134,139 @@ class SignalResponse(BaseModel):
             expires_at_ms=res.expires_at_ms,
             technical_snapshot=TechnicalSnapshotSchema.from_domain(res.technical_snapshot),
         )
+
+
+class DataQualityReportSchema(BaseModel):
+    valid: bool
+    reason: str
+    candle_count: int
+    gap_count: int = 0
+    outlier_count: int = 0
+    duplicate_count: int = 0
+
+    @classmethod
+    def from_domain(cls, report: DataQualityReport) -> "DataQualityReportSchema":
+        return cls(
+            valid=report.valid,
+            reason=report.reason,
+            candle_count=report.candle_count,
+            gap_count=report.gap_count,
+            outlier_count=report.outlier_count,
+            duplicate_count=report.duplicate_count,
+        )
+
+
+class TimeframeIntelligenceSchema(BaseModel):
+    timeframe: str
+    trend_bias: TradeDirection
+    regime: MarketRegime
+    rsi: float
+    ema_fast: float
+    ema_slow: float
+    sma_fast: float
+    sma_slow: float
+    macd_histogram: float
+    trend_strength: float
+    latest_close: float
+
+    @classmethod
+    def from_domain(cls, item: TimeframeIntelligence) -> "TimeframeIntelligenceSchema":
+        return cls(
+            timeframe=item.timeframe,
+            trend_bias=item.trend_bias,
+            regime=item.regime,
+            rsi=item.rsi,
+            ema_fast=item.ema_fast,
+            ema_slow=item.ema_slow,
+            sma_fast=item.sma_fast,
+            sma_slow=item.sma_slow,
+            macd_histogram=item.macd_histogram,
+            trend_strength=item.trend_strength,
+            latest_close=item.latest_close,
+        )
+
+
+class MultiTimeframeReportSchema(BaseModel):
+    instrument: str
+    primary_timeframe: str
+    alignment_state: AlignmentState
+    alignment_score: int = Field(..., ge=0, le=100)
+    higher_tf_bias: TradeDirection
+    timeframe_summaries: List[TimeframeIntelligenceSchema]
+    alignment_notes: List[str]
+
+    @classmethod
+    def from_domain(cls, report: MultiTimeframeReport) -> "MultiTimeframeReportSchema":
+        return cls(
+            instrument=report.instrument,
+            primary_timeframe=report.primary_timeframe,
+            alignment_state=report.alignment_state,
+            alignment_score=report.alignment_score,
+            higher_tf_bias=report.higher_tf_bias,
+            timeframe_summaries=[TimeframeIntelligenceSchema.from_domain(s) for s in report.timeframe_summaries],
+            alignment_notes=report.alignment_notes,
+        )
+
+
+class MarketIntelligenceResponse(BaseModel):
+    instrument: str
+    data_quality: DataQualityReportSchema
+    mtf_report: MultiTimeframeReportSchema
+    signal: SignalResponse
+
+
+class CandleHistoryIngestRequest(BaseModel):
+    instrument: str = Field(..., min_length=3, max_length=20)
+    timeframe: str = Field(..., pattern="^(1m|5m|15m)$")
+    source: str = Field(default="manual_ingest", min_length=2, max_length=32)
+    candles: List[CandleSchema] = Field(..., min_length=25, max_length=1000)
+
+
+class CandleHistoryIngestResponse(BaseModel):
+    instrument: str
+    timeframe: str
+    received_count: int
+    inserted_count: int
+    total_stored: int
+
+
+class ReplayStartRequest(BaseModel):
+    instrument: str = Field(default="EUR/USD", min_length=3, max_length=20)
+    total_bars: int = Field(default=420, ge=60, le=600)
+    initial_window: int = Field(default=375, ge=25, le=500)
+
+
+class ReplayStepRequest(BaseModel):
+    steps: int = Field(default=1, ge=1, le=100)
+
+
+class ReplayStateResponse(BaseModel):
+    session_id: str
+    instrument: str
+    timeframe: str
+    cursor_index: int
+    total_bars: int
+    cursor_timestamp: int
+    active: bool
+
+    @classmethod
+    def from_domain(cls, state: ReplayState) -> "ReplayStateResponse":
+        return cls(
+            session_id=state.session_id,
+            instrument=state.instrument,
+            timeframe=state.timeframe,
+            cursor_index=state.cursor_index,
+            total_bars=state.total_bars,
+            cursor_timestamp=state.cursor_timestamp,
+            active=state.active,
+        )
+
+
+class ReplayEvaluationResponse(BaseModel):
+    replay_state: ReplayStateResponse
+    data_quality: DataQualityReportSchema
+    mtf_report: MultiTimeframeReportSchema
+    signal: SignalResponse
 
 
 class RiskPolicySchema(BaseModel):

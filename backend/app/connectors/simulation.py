@@ -173,7 +173,7 @@ class SimulationConnector(BrokerConnector):
                     "volume": round(90.0 + random.random() * 200.0, 2),
                 }
             )
-            if len(candles) > 120:
+            if len(candles) > 600:
                 candles.pop(0)
         else:
             last["high"] = round(max(last["high"], next_close), 6)

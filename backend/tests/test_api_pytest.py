@@ -90,6 +90,61 @@ def test_candles_and_signal_pipeline(client: TestClient) -> None:
     assert sig["direction"] in ("CALL", "PUT", "NO_TRADE")
     assert 0.0 <= sig["calibrated_probability"] <= 1.0
     assert 0 <= sig["confidence_score"] <= 100
+    assert sig["technical_snapshot"]["sma_fast"] > 0
+
+
+def test_historical_candle_persistence_and_idempotent_ingest(client: TestClient) -> None:
+    hist_res = client.get("/api/v1/candles/history", params={"instrument": "EUR/USD", "timeframe": "1m", "limit": 60})
+    assert hist_res.status_code == 200
+    candles = hist_res.json()
+    assert len(candles) == 60
+
+    ingest_res = client.post(
+        "/api/v1/candles/history/ingest",
+        json={
+            "instrument": "EUR/USD",
+            "timeframe": "1m",
+            "source": "pytest_replay",
+            "candles": candles,
+        },
+    )
+    assert ingest_res.status_code == 200
+    assert ingest_res.json()["inserted_count"] == 0
+    assert ingest_res.json()["total_stored"] >= 60
+
+
+def test_multi_timeframe_market_intelligence(client: TestClient) -> None:
+    res = client.get("/api/v1/market/intelligence", params={"instrument": "EUR/USD"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["data_quality"]["valid"] is True
+    assert len(body["mtf_report"]["timeframe_summaries"]) == 3
+    tfs = [item["timeframe"] for item in body["mtf_report"]["timeframe_summaries"]]
+    assert tfs == ["1m", "5m", "15m"]
+    assert body["signal"]["direction"] in ("CALL", "PUT", "NO_TRADE")
+
+
+def test_simulator_replay_lifecycle(client: TestClient) -> None:
+    start_res = client.post(
+        "/api/v1/replay/start",
+        json={"instrument": "EUR/USD", "total_bars": 420, "initial_window": 375},
+    )
+    assert start_res.status_code == 200
+    start_data = start_res.json()
+    assert start_data["replay_state"]["active"] is True
+    assert start_data["replay_state"]["cursor_index"] == 374
+
+    step_res = client.post("/api/v1/replay/step", json={"steps": 5})
+    assert step_res.status_code == 200
+    assert step_res.json()["replay_state"]["cursor_index"] == 379
+
+    reset_res = client.post("/api/v1/replay/reset")
+    assert reset_res.status_code == 200
+    assert reset_res.json()["replay_state"]["cursor_index"] == 374
+
+    state_res = client.get("/api/v1/replay/state")
+    assert state_res.status_code == 200
+    assert state_res.json()["active"] is True
 
 
 def test_order_execution_and_idempotency(client: TestClient) -> None:
@@ -107,7 +162,6 @@ def test_order_execution_and_idempotency(client: TestClient) -> None:
     first_data = first.json()
     assert first_data["status"] in ("WON", "LOST")
 
-    # Re-sending identical idempotency key returns same order without double execution
     replay = client.post("/api/v1/orders", json=payload)
     assert replay.status_code == 200
     assert replay.json()["order_id"] == first_data["order_id"]

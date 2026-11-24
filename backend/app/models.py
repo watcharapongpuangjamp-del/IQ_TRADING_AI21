@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, String
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -65,3 +65,23 @@ class DailySummaryModel(Base):
     consecutive_losses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     peak_drawdown: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class HistoricalCandleModel(Base):
+    __tablename__ = "historical_candles"
+    __table_args__ = (
+        UniqueConstraint("instrument", "timeframe", "timestamp", name="uq_candle_series_ts"),
+        Index("ix_candle_lookup", "instrument", "timeframe", "timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    instrument: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    timeframe: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    timestamp: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    open: Mapped[float] = mapped_column(Float, nullable=False)
+    high: Mapped[float] = mapped_column(Float, nullable=False)
+    low: Mapped[float] = mapped_column(Float, nullable=False)
+    close: Mapped[float] = mapped_column(Float, nullable=False)
+    volume: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), default="simulation", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
