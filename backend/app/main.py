@@ -90,10 +90,13 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
+    application.state.settings = settings
     application.state.connector = connector
     application.state.strategy_engine = strategy_engine
     application.state.replay_engine = replay_engine
     application.state.execution_engine = execution_engine
+    if custom_settings is not None:
+        application.dependency_overrides[get_settings] = lambda: custom_settings
 
     origins = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip() and origin.strip() != "*"]
     if origins:
