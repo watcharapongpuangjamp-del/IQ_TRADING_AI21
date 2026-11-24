@@ -37,7 +37,11 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run pure-Python engine unit tests
-        run: python -m unittest discover -s tests -p "test_engines_unittest.py" -v
+        env:
+          PYTHONPATH: .
+        run: python -m unittest discover -s tests -t . -p "test_engines_unittest.py" -v
 
       - name: Run FastAPI pytest suite
-        run: pytest -v
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -v
