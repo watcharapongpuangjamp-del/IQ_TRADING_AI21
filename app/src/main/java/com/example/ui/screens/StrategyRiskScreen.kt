@@ -1,0 +1,419 @@
+package com.example.ui.screens
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.example.model.RiskPolicy
+import com.example.model.StrategyConfig
+import com.example.ui.theme.LocalTradingColors
+import kotlin.math.roundToInt
+
+@Composable
+fun StrategyRiskScreen(
+    strategy: StrategyConfig,
+    riskPolicy: RiskPolicy,
+    onSaveStrategy: (StrategyConfig) -> Unit,
+    onSaveRiskPolicy: (RiskPolicy) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val tradingColors = LocalTradingColors.current
+    var selectedTab by remember { mutableIntStateOf(0) }
+
+    // Strategy editable state synced from cloud
+    var strategyName by remember(strategy.id) { mutableStateOf(strategy.name) }
+    var tradeAmount by remember(strategy.id) { mutableDoubleStateOf(strategy.tradeAmount) }
+    var rsiPeriod by remember(strategy.id) { mutableIntStateOf(strategy.rsiPeriod) }
+    var rsiOversold by remember(strategy.id) { mutableIntStateOf(strategy.rsiOversold) }
+    var rsiOverbought by remember(strategy.id) { mutableIntStateOf(strategy.rsiOverbought) }
+    var emaFast by remember(strategy.id) { mutableIntStateOf(strategy.emaFast) }
+    var emaSlow by remember(strategy.id) { mutableIntStateOf(strategy.emaSlow) }
+    var bbPeriod by remember(strategy.id) { mutableIntStateOf(strategy.bbPeriod) }
+    var bbStdDev by remember(strategy.id) { mutableDoubleStateOf(strategy.bbStdDev) }
+    var minConfidence by remember(strategy.id) { mutableIntStateOf(strategy.minConfidence) }
+
+    // Risk policy editable state
+    var maxTradeAmount by remember(riskPolicy.updatedAt) { mutableDoubleStateOf(riskPolicy.maxTradeAmount) }
+    var maxDailyLoss by remember(riskPolicy.updatedAt) { mutableDoubleStateOf(riskPolicy.maxDailyLoss) }
+    var maxConsecutiveLosses by remember(riskPolicy.updatedAt) { mutableIntStateOf(riskPolicy.maxConsecutiveLosses) }
+    var maxDailyTrades by remember(riskPolicy.updatedAt) { mutableIntStateOf(riskPolicy.maxDailyTrades) }
+    var maxPortfolioExposure by remember(riskPolicy.updatedAt) { mutableDoubleStateOf(riskPolicy.maxPortfolioExposure) }
+    var cooldownMinutes by remember(riskPolicy.updatedAt) { mutableIntStateOf(riskPolicy.cooldownMinutes) }
+
+    LaunchedEffect(strategy) {
+        strategyName = strategy.name
+        tradeAmount = strategy.tradeAmount
+        rsiPeriod = strategy.rsiPeriod
+        rsiOversold = strategy.rsiOversold
+        rsiOverbought = strategy.rsiOverbought
+        emaFast = strategy.emaFast
+        emaSlow = strategy.emaSlow
+        bbPeriod = strategy.bbPeriod
+        bbStdDev = strategy.bbStdDev
+        minConfidence = strategy.minConfidence
+    }
+
+    Column(modifier = modifier.fillMaxSize()) {
+        TabRow(
+            selectedTabIndex = selectedTab,
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = tradingColors.cyan
+        ) {
+            Tab(
+                selected = selectedTab == 0,
+                onClick = { selectedTab = 0 },
+                text = { Text("ปรับแต่งกลยุทธ์", fontWeight = FontWeight.SemiBold) },
+                modifier = Modifier.testTag("tab_strategy_studio")
+            )
+            Tab(
+                selected = selectedTab == 1,
+                onClick = { selectedTab = 1 },
+                text = { Text("จุดตัดขาดทุน & Risk", fontWeight = FontWeight.SemiBold) },
+                modifier = Modifier.testTag("tab_risk_guardrails")
+            )
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            if (selectedTab == 0) {
+                item {
+                    Surface(
+                        color = tradingColors.surfaceElevated,
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, tradingColors.cardBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "พรีเซ็ตกลยุทธ์ยอดนิยม",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                FilterChip(
+                                    selected = false,
+                                    onClick = {
+                                        strategyName = "Scalp EMA 9/21"
+                                        emaFast = 9; emaSlow = 21; rsiPeriod = 14
+                                        rsiOversold = 30; rsiOverbought = 70; minConfidence = 64
+                                    },
+                                    label = { Text("Scalp EMA", style = MaterialTheme.typography.labelSmall) },
+                                    colors = FilterChipDefaults.filterChipColors(),
+                                    modifier = Modifier.testTag("preset_scalp_ema")
+                                )
+                                FilterChip(
+                                    selected = false,
+                                    onClick = {
+                                        strategyName = "Bollinger Reversion"
+                                        bbPeriod = 20; bbStdDev = 2.2
+                                        rsiOversold = 25; rsiOverbought = 75; minConfidence = 70
+                                    },
+                                    label = { Text("BB Reversion", style = MaterialTheme.typography.labelSmall) },
+                                    modifier = Modifier.testTag("preset_bb_reversion")
+                                )
+                                FilterChip(
+                                    selected = false,
+                                    onClick = {
+                                        strategyName = "Conservative Trend"
+                                        emaFast = 12; emaSlow = 50; minConfidence = 78
+                                    },
+                                    label = { Text("Conservative", style = MaterialTheme.typography.labelSmall) },
+                                    modifier = Modifier.testTag("preset_conservative")
+                                )
+                            }
+
+                            OutlinedTextField(
+                                value = strategyName,
+                                onValueChange = { if (it.length <= 80) strategyName = it },
+                                label = { Text("ชื่อกลยุทธ์") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("strategy_name_input")
+                            )
+
+                            LabeledSlider(
+                                title = "ขนาดเงินลงทุนต่อไม้",
+                                valueText = "$${tradeAmount.roundToInt()}",
+                                value = tradeAmount.toFloat(),
+                                range = 5f..maxTradeAmount.toFloat().coerceAtLeast(10f),
+                                onValueChange = { tradeAmount = it.roundToInt().toDouble() }
+                            )
+
+                            LabeledSlider(
+                                title = "เกณฑ์ความมั่นใจขั้นต่ำ (Min Confidence)",
+                                valueText = "$minConfidence%",
+                                value = minConfidence.toFloat(),
+                                range = 50f..95f,
+                                onValueChange = { minConfidence = it.roundToInt() }
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    Surface(
+                        color = tradingColors.surfaceElevated,
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, tradingColors.cardBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "พารามิเตอร์กราฟเทคนิค (RSI / EMA / BB)",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = tradingColors.cyan
+                            )
+
+                            LabeledSlider(
+                                title = "RSI Period",
+                                valueText = "$rsiPeriod",
+                                value = rsiPeriod.toFloat(),
+                                range = 5f..30f,
+                                onValueChange = { rsiPeriod = it.roundToInt() }
+                            )
+                            LabeledSlider(
+                                title = "RSI Oversold (โซนเข้า CALL)",
+                                valueText = "$rsiOversold",
+                                value = rsiOversold.toFloat(),
+                                range = 15f..42f,
+                                onValueChange = { rsiOversold = it.roundToInt() }
+                            )
+                            LabeledSlider(
+                                title = "RSI Overbought (โซนเข้า PUT)",
+                                valueText = "$rsiOverbought",
+                                value = rsiOverbought.toFloat(),
+                                range = 58f..88f,
+                                onValueChange = { rsiOverbought = it.roundToInt() }
+                            )
+                            LabeledSlider(
+                                title = "EMA Fast / Slow",
+                                valueText = "$emaFast / $emaSlow",
+                                value = emaFast.toFloat(),
+                                range = 3f..25f,
+                                onValueChange = {
+                                    emaFast = it.roundToInt()
+                                    if (emaSlow <= emaFast) emaSlow = emaFast + 8
+                                }
+                            )
+                            LabeledSlider(
+                                title = "EMA Slow",
+                                valueText = "$emaSlow",
+                                value = emaSlow.toFloat(),
+                                range = (emaFast + 4).toFloat().coerceAtMost(90f)..100f,
+                                onValueChange = { emaSlow = it.roundToInt() }
+                            )
+                            LabeledSlider(
+                                title = "Bollinger Bands StdDev",
+                                valueText = String.format("%.1f", bbStdDev),
+                                value = bbStdDev.toFloat(),
+                                range = 1.0f..3.5f,
+                                onValueChange = { bbStdDev = ((it * 10).roundToInt() / 10.0) }
+                            )
+
+                            Spacer(Modifier.height(6.dp))
+                            Button(
+                                onClick = {
+                                    onSaveStrategy(
+                                        strategy.copy(
+                                            name = strategyName.ifBlank { "Custom Strategy" },
+                                            tradeAmount = tradeAmount.coerceIn(1.0, maxTradeAmount),
+                                            rsiPeriod = rsiPeriod,
+                                            rsiOversold = rsiOversold,
+                                            rsiOverbought = rsiOverbought,
+                                            emaFast = emaFast,
+                                            emaSlow = emaSlow.coerceAtLeast(emaFast + 1),
+                                            bbPeriod = bbPeriod,
+                                            bbStdDev = bbStdDev,
+                                            minConfidence = minConfidence
+                                        )
+                                    )
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = tradingColors.bullish,
+                                    contentColor = tradingColors.surfaceCanvas
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp)
+                                    .testTag("save_strategy_button")
+                            ) {
+                                Text("บันทึกกลยุทธ์และซิงค์ขึ้น Cloud", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            } else {
+                item {
+                    Surface(
+                        color = tradingColors.surfaceElevated,
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, tradingColors.cardBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "การตั้งค่าจุดตัดขาดทุนอัตโนมัติ (Risk Guardrails)",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = tradingColors.warning
+                            )
+                            Text(
+                                text = "ระบบ Risk Engine ทำงานเป็นอิสระ ไม่มี AI หรือกลยุทธ์ใดสามารถสั่งข้ามลิมิตเหล่านี้ได้",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            LabeledSlider(
+                                title = "ขาดทุนสูงสุดต่อวัน (Daily Stop-Loss)",
+                                valueText = "$${maxDailyLoss.roundToInt()}",
+                                value = maxDailyLoss.toFloat(),
+                                range = 25f..2000f,
+                                onValueChange = { maxDailyLoss = it.roundToInt().toDouble() }
+                            )
+                            LabeledSlider(
+                                title = "จำกัดจำนวนแพ้ติดต่อกันสูงสุด",
+                                valueText = "$maxConsecutiveLosses ไม้",
+                                value = maxConsecutiveLosses.toFloat(),
+                                range = 1f..10f,
+                                onValueChange = { maxConsecutiveLosses = it.roundToInt() }
+                            )
+                            LabeledSlider(
+                                title = "วงเงินสูงสุดต่อ 1 ไม้",
+                                valueText = "$${maxTradeAmount.roundToInt()}",
+                                value = maxTradeAmount.toFloat(),
+                                range = 10f..1000f,
+                                onValueChange = { maxTradeAmount = it.roundToInt().toDouble() }
+                            )
+                            LabeledSlider(
+                                title = "จำนวนออเดอร์สูงสุดต่อวัน",
+                                valueText = "$maxDailyTrades ไม้",
+                                value = maxDailyTrades.toFloat(),
+                                range = 5f..150f,
+                                onValueChange = { maxDailyTrades = it.roundToInt() }
+                            )
+                            LabeledSlider(
+                                title = "เพดานความเสี่ยงพอร์ตรวม (Max Exposure)",
+                                valueText = "$${maxPortfolioExposure.roundToInt()}",
+                                value = maxPortfolioExposure.toFloat(),
+                                range = 50f..5000f,
+                                onValueChange = { maxPortfolioExposure = it.roundToInt().toDouble() }
+                            )
+                            LabeledSlider(
+                                title = "ระยะพัก Cooldown หลังขาดทุน",
+                                valueText = "$cooldownMinutes นาที",
+                                value = cooldownMinutes.toFloat(),
+                                range = 0f..120f,
+                                onValueChange = { cooldownMinutes = it.roundToInt() }
+                            )
+
+                            Button(
+                                onClick = {
+                                    onSaveRiskPolicy(
+                                        riskPolicy.copy(
+                                            maxTradeAmount = maxTradeAmount,
+                                            maxDailyLoss = maxDailyLoss,
+                                            maxConsecutiveLosses = maxConsecutiveLosses,
+                                            maxDailyTrades = maxDailyTrades,
+                                            maxPortfolioExposure = maxPortfolioExposure,
+                                            cooldownMinutes = cooldownMinutes
+                                        )
+                                    )
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = tradingColors.warning,
+                                    contentColor = tradingColors.surfaceCanvas
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp)
+                                    .testTag("save_risk_policy_button")
+                            ) {
+                                Text("บันทึกกฎจุดตัดขาดทุนและซิงค์ Cloud", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LabeledSlider(
+    title: String,
+    valueText: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit
+) {
+    val tradingColors = LocalTradingColors.current
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(title, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+            Text(valueText, style = MaterialTheme.typography.labelMedium, color = tradingColors.cyan)
+        }
+        Slider(
+            value = value.coerceIn(range.start, range.endInclusive),
+            onValueChange = onValueChange,
+            valueRange = range,
+            colors = SliderDefaults.colors(
+                thumbColor = tradingColors.cyan,
+                activeTrackColor = tradingColors.cyan,
+                inactiveTrackColor = tradingColors.cardBorder
+            )
+        )
+    }
+}
