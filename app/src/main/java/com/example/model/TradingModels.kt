@@ -79,7 +79,19 @@ enum class MarketRegime(val labelTh: String) {
     TRENDING_UP("แนวโน้มขาขึ้น"),
     TRENDING_DOWN("แนวโน้มขาลง"),
     RANGING("แกว่งตัวในกรอบ"),
-    HIGH_VOLATILITY("ผันผวนสูง")
+    HIGH_VOLATILITY("ผันผวนสูง"),
+    STRONG_TREND("เทรนด์แข็งแกร่ง"),
+    WEAK_TREND("เทรนด์อ่อนตัว"),
+    SIDEWAYS("แกว่งออกข้าง"),
+    LOW_VOLATILITY("ผันผวนต่ำ"),
+    BREAKOUT("ทะลุกรอบราคา"),
+    REVERSAL("กลับตัวระยะสั้น"),
+    UNKNOWN("ยังไม่ชัดเจน");
+
+    companion object {
+        fun safeValueOf(raw: String?): MarketRegime =
+            entries.firstOrNull { it.name == raw } ?: SIDEWAYS
+    }
 }
 
 @Keep
@@ -336,7 +348,14 @@ data class TechnicalSnapshot(
     val bbUpperSeries: List<Double> = emptyList(),
     val bbLowerSeries: List<Double> = emptyList(),
     val rsiSeries: List<Double> = emptyList(),
-    val macdHistSeries: List<Double> = emptyList()
+    val macdHistSeries: List<Double> = emptyList(),
+    val adx: Double = 0.0,
+    val plusDi: Double = 0.0,
+    val minusDi: Double = 0.0,
+    val stochasticK: Double = 50.0,
+    val stochasticD: Double = 50.0,
+    val vwap: Double = 0.0,
+    val vwapReliable: Boolean = false
 )
 
 data class SignalAnalysis(
@@ -535,4 +554,49 @@ val SUPPORTED_INSTRUMENTS = listOf(
     InstrumentSpec("USD/JPY", "Forex", 153.420, 0.075, 0.83, 3),
     InstrumentSpec("BTC/USD", "Crypto", 94250.0, 145.0, 0.80, 2),
     InstrumentSpec("XAU/USD", "Commodity", 2642.50, 1.85, 0.82, 2)
+)
+
+data class StrategyModuleSummary(
+    val strategyId: String,
+    val name: String,
+    val description: String,
+    val targetRegimes: List<String>,
+    val entryConditions: String,
+    val exitConditions: String,
+    val riskParameters: String,
+    val winRate: Double,
+    val profitFactor: Double,
+    val maxDrawdown: Double,
+    val sampleCount: Int,
+    val expectedValue: Double,
+    val regimeFitScore: Double,
+    val selectionScore: Double,
+    val selected: Boolean,
+    val defaultConfig: StrategyConfig
+)
+
+data class StrategySelectionReport(
+    val selectedStrategyId: String,
+    val selectedStrategyName: String,
+    val autoSelected: Boolean,
+    val currentRegime: MarketRegime,
+    val selectionReason: String,
+    val strategies: List<StrategyModuleSummary>
+)
+
+data class WebSocketConnectionState(
+    val marketConnected: Boolean = false,
+    val signalConnected: Boolean = false,
+    val systemConnected: Boolean = false,
+    val reconnectAttempt: Int = 0,
+    val isFallbackPolling: Boolean = false,
+    val lastError: String? = null
+)
+
+data class OfflineSyncStatus(
+    val pendingCount: Int = 0,
+    val failedCount: Int = 0,
+    val isFlushing: Boolean = false,
+    val lastSyncedAtMillis: Long? = null,
+    val lastError: String? = null
 )

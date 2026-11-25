@@ -79,6 +79,7 @@ fun TerminalScreen(
     onResetReplay: () -> Unit,
     onExitReplay: () -> Unit,
     onReconcileOrders: () -> Unit = {},
+    onFlushSyncQueue: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
@@ -128,6 +129,20 @@ fun TerminalScreen(
                                 color = if (mode == ExecutionMode.LIVE) tradingColors.warning else tradingColors.cyan
                             )
                         }
+                        val ws = terminalState.wsState
+                        val activeWsChannels = listOf(ws.marketConnected, ws.signalConnected, ws.systemConnected).count { it }
+                        val wsStatusLabel = when {
+                            activeWsChannels > 0 -> "WS Channels $activeWsChannels/3 (Market•Signal•Sys)"
+                            ws.isFallbackPolling -> "Fallback Polling (Retry #${ws.reconnectAttempt})"
+                            backendConnected -> "REST Connected"
+                            else -> "Local Sim Stream"
+                        }
+                        Text(
+                            text = wsStatusLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (activeWsChannels > 0) tradingColors.bullish else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("ws_channel_status_label")
+                        )
                         Text(
                             text = "$${String.format("%,.2f", balance)}",
                             style = MaterialTheme.typography.headlineMedium,
@@ -164,6 +179,65 @@ fun TerminalScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("KILL STOP", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1a. Offline Sync Queue Status Banner
+        val syncStatus = terminalState.offlineSyncStatus
+        if (syncStatus.pendingCount > 0 || syncStatus.failedCount > 0) {
+            item {
+                Surface(
+                    color = tradingColors.cyanContainer,
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, tradingColors.cyan.copy(alpha = 0.55f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("offline_sync_banner")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = "Offline Sync Queue: ค้างซิงค์ ${syncStatus.pendingCount} รายการ" +
+                                    if (syncStatus.failedCount > 0) " (รอตรวจสอบ ${syncStatus.failedCount})" else "",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = tradingColors.cyan
+                            )
+                            Text(
+                                text = syncStatus.lastError ?: "ข้อมูลถูกเก็บใน Room DB แล้ว และจะซิงค์ขึ้น Firestore อัตโนมัติ",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Button(
+                            onClick = onFlushSyncQueue,
+                            enabled = !syncStatus.isFlushing,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = tradingColors.cyan,
+                                contentColor = tradingColors.surfaceCanvas
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .height(48.dp)
+                                .testTag("flush_sync_queue_button")
+                        ) {
+                            Text(
+                                text = if (syncStatus.isFlushing) "กำลังซิงค์..." else "ซิงค์ทันที",
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }
@@ -394,6 +468,41 @@ fun TerminalScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Surface(
+                                color = tradingColors.surfaceCanvas,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, tradingColors.cardBorder),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("indicator_telemetry_row")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "ADX ${String.format("%.1f", snapshot.adx)} (+DI ${String.format("%.0f", snapshot.plusDi)}/-DI ${String.format("%.0f", snapshot.minusDi)})",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = tradingColors.cyan
+                                    )
+                                    Text(
+                                        text = "Stoch ${String.format("%.0f", snapshot.stochasticK)}/${String.format("%.0f", snapshot.stochasticD)}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = if (snapshot.vwapReliable) {
+                                            "VWAP ${if (snapshot.vwap >= 100.0) String.format("%.2f", snapshot.vwap) else String.format("%.5f", snapshot.vwap)}"
+                                        } else {
+                                            "VWAP N/A"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (snapshot.vwapReliable) tradingColors.bullish else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
 
                         if (signal.supportingEvidence.isNotEmpty()) {

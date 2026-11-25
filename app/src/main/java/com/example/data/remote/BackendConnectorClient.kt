@@ -9,6 +9,7 @@ import com.example.model.OrderLifecycleEvent
 import com.example.model.ReconcileSummary
 import com.example.model.RiskPolicy
 import com.example.model.StrategyConfig
+import com.example.model.StrategySelectionReport
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CancellationException
@@ -164,12 +165,28 @@ interface FastApiTradingApi {
         @Path("modelId") modelId: String,
         @Body payload: PromoteModelRequestDto
     ): Response<ModelRegistryItemDto>
+
+    @GET("api/v1/strategies")
+    suspend fun listStrategies(
+        @Header("Authorization") authHeader: String?,
+        @Query("instrument") instrument: String,
+        @Query("timeframe") timeframe: String
+    ): Response<StrategySelectionReportDto>
+
+    @POST("api/v1/strategies/select")
+    suspend fun selectStrategy(
+        @Header("Authorization") authHeader: String?,
+        @Body payload: SelectStrategyRequestDto
+    ): Response<StrategySelectionReportDto>
 }
 
 class BackendConnectorClient {
 
     private val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
     private val tickAdapter = moshi.adapter(WebSocketTickDto::class.java)
+    private val signalWsAdapter = moshi.adapter(WebSocketSignalDto::class.java)
+    private val systemWsAdapter = moshi.adapter(WebSocketSystemDto::class.java)
+    private val strategyReportAdapter = moshi.adapter(StrategySelectionReportDto::class.java)
     private val intelligenceAdapter = moshi.adapter(MarketIntelligenceResponseDto::class.java)
     private val modelAdapter = moshi.adapter(ModelRegistryItemDto::class.java)
     private val orderResponseAdapter = moshi.adapter(OrderSubmitResponseDto::class.java)
@@ -181,6 +198,8 @@ class BackendConnectorClient {
         .build()
 
     private var activeWebSocket: WebSocket? = null
+    private var signalWebSocket: WebSocket? = null
+    private var systemWebSocket: WebSocket? = null
 
     fun isValidHttpUrl(url: String): Boolean {
         val trimmed = url.trim()
@@ -261,6 +280,57 @@ class BackendConnectorClient {
         } catch (_: Exception) {
             null
         }
+    }
+
+    fun parseStrategySelectionReportJson(rawJson: String): StrategySelectionReportDto? {
+        return try {
+            strategyReportAdapter.fromJson(rawJson)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun parseWebSocketSignalJson(rawJson: String): WebSocketSignalDto? {
+        return try {
+            signalWsAdapter.fromJson(rawJson)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun parseWebSocketSystemJson(rawJson: String): WebSocketSystemDto? {
+        return try {
+            systemWsAdapter.fromJson(rawJson)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun resolveChannelWsUrl(
+        baseUrl: String,
+        explicitWsUrl: String,
+        channelPath: String
+    ): String? {
+        val rawWs = explicitWsUrl.trim()
+        val hostBase = when {
+            isValidWsUrl(rawWs) -> rawWs.substringBefore("/ws/").trimEnd('/')
+            isValidHttpUrl(baseUrl) -> {
+                val trimmed = baseUrl.trim().trimEnd('/')
+                if (trimmed.startsWith("https://", ignoreCase = true)) {
+                    "wss://" + trimmed.removePrefix("https://").removePrefix("HTTPS://")
+                } else {
+                    "ws://" + trimmed.removePrefix("http://").removePrefix("HTTP://")
+                }
+            }
+            else -> return null
+        }
+        val normalizedPath = if (channelPath.startsWith("/")) channelPath else "/$channelPath"
+        return "$hostBase$normalizedPath"
+    }
+
+    fun computeWsReconnectDelayMs(attempt: Int): Long {
+        val shift = attempt.coerceIn(0, 5)
+        return minOf(30_000L, 1_000L * (1L shl shift))
     }
 
     private fun buildAuthHeader(bearerToken: String?): String? =
@@ -605,6 +675,46 @@ class BackendConnectorClient {
         }
     }
 
+    suspend fun fetchStrategyModules(
+        baseUrl: String,
+        bearerToken: String?,
+        instrument: String,
+        timeframe: String,
+        userId: String = ""
+    ): Result<StrategySelectionReport> = safeCall {
+        val response = buildApi(baseUrl).listStrategies(buildAuthHeader(bearerToken), instrument, timeframe)
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!.toDomain(userId)
+        } else {
+            throw IllegalStateException("Strategies HTTP ${response.code()}")
+        }
+    }
+
+    suspend fun selectStrategyModule(
+        baseUrl: String,
+        bearerToken: String?,
+        strategyId: String?,
+        autoSelect: Boolean,
+        instrument: String,
+        timeframe: String,
+        userId: String = ""
+    ): Result<StrategySelectionReport> = safeCall {
+        val response = buildApi(baseUrl).selectStrategy(
+            buildAuthHeader(bearerToken),
+            SelectStrategyRequestDto(
+                strategy_id = strategyId,
+                auto_select = autoSelect,
+                instrument = instrument,
+                timeframe = timeframe
+            )
+        )
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!.toDomain(userId)
+        } else {
+            throw IllegalStateException("Strategy select HTTP ${response.code()}")
+        }
+    }
+
     private suspend inline fun <T> safeCall(crossinline block: suspend () -> T): Result<T> {
         return try {
             Result.success(block())
@@ -649,8 +759,82 @@ class BackendConnectorClient {
         })
     }
 
+    fun connectSignalStream(
+        wsUrl: String,
+        bearerToken: String?,
+        onOpen: () -> Unit = {},
+        onSignal: (WebSocketSignalDto) -> Unit,
+        onFailure: (String) -> Unit = {}
+    ) {
+        signalWebSocket?.close(1000, "Switching stream")
+        signalWebSocket = null
+        if (!isValidWsUrl(wsUrl)) return
+        val reqBuilder = Request.Builder().url(wsUrl.trim())
+        if (!bearerToken.isNullOrBlank()) {
+            reqBuilder.addHeader("Authorization", "Bearer ${bearerToken.trim()}")
+        }
+        signalWebSocket = httpClient.newWebSocket(reqBuilder.build(), object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: OkResponse) {
+                onOpen()
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                parseWebSocketSignalJson(text)?.let(onSignal)
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: OkResponse?) {
+                onFailure(t.localizedMessage ?: "Signal WebSocket lost")
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (code != 1000) {
+                    onFailure(reason.ifBlank { "Signal WS closed ($code)" })
+                }
+            }
+        })
+    }
+
+    fun connectSystemStream(
+        wsUrl: String,
+        bearerToken: String?,
+        onOpen: () -> Unit = {},
+        onSystem: (WebSocketSystemDto) -> Unit,
+        onFailure: (String) -> Unit = {}
+    ) {
+        systemWebSocket?.close(1000, "Switching stream")
+        systemWebSocket = null
+        if (!isValidWsUrl(wsUrl)) return
+        val reqBuilder = Request.Builder().url(wsUrl.trim())
+        if (!bearerToken.isNullOrBlank()) {
+            reqBuilder.addHeader("Authorization", "Bearer ${bearerToken.trim()}")
+        }
+        systemWebSocket = httpClient.newWebSocket(reqBuilder.build(), object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: OkResponse) {
+                onOpen()
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                parseWebSocketSystemJson(text)?.let(onSystem)
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: OkResponse?) {
+                onFailure(t.localizedMessage ?: "System WebSocket lost")
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (code != 1000) {
+                    onFailure(reason.ifBlank { "System WS closed ($code)" })
+                }
+            }
+        })
+    }
+
     fun disconnectTickStream() {
         activeWebSocket?.close(1000, "Client closing")
         activeWebSocket = null
+        signalWebSocket?.close(1000, "Client closing")
+        signalWebSocket = null
+        systemWebSocket?.close(1000, "Client closing")
+        systemWebSocket = null
     }
 }

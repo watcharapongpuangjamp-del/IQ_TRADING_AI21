@@ -449,3 +449,49 @@ def test_pending_order_auto_reconciles_before_new_trade_without_double_counting(
     noop = client.post("/api/v1/trading/reconcile").json()
     assert noop["checked_count"] == 0
     assert client.get("/api/v1/state").json()["total_trades_today"] == 2
+
+
+def test_phase6_strategies_endpoints_and_expanded_indicators(client: TestClient) -> None:
+    sig_res = client.get("/api/v1/signals/latest", params={"instrument": "EUR/USD", "timeframe": "1m"})
+    assert sig_res.status_code == 200
+    snap = sig_res.json()["technical_snapshot"]
+    assert "adx" in snap
+    assert "stochastic_k" in snap
+    assert "vwap" in snap
+    assert "vwap_reliable" in snap
+
+    list_res = client.get("/api/v1/strategies", params={"instrument": "EUR/USD", "timeframe": "1m"})
+    assert list_res.status_code == 200
+    body = list_res.json()
+    assert len(body["strategies"]) == 8
+    assert body["auto_selected"] is True
+    assert sum(1 for s in body["strategies"] if s["selected"]) == 1
+
+    pin_res = client.post(
+        "/api/v1/strategies/select",
+        json={"strategy_id": "rsi_reversal", "auto_select": False, "instrument": "EUR/USD", "timeframe": "1m"},
+    )
+    assert pin_res.status_code == 200
+    assert pin_res.json()["selected_strategy_id"] == "rsi_reversal"
+    assert pin_res.json()["auto_selected"] is False
+
+    bad_res = client.post(
+        "/api/v1/strategies/select",
+        json={"strategy_id": "does_not_exist", "auto_select": False},
+    )
+    assert bad_res.status_code == 404
+
+
+def test_phase6_signal_and_system_websockets(client: TestClient) -> None:
+    with client.websocket_connect("/ws/signals?instrument=EUR/USD&timeframe=1m") as ws_sig:
+        sig_msg = ws_sig.receive_json()
+        assert sig_msg["type"] == "signal"
+        assert sig_msg["instrument"] == "EUR/USD"
+        assert "direction" in sig_msg["signal"]
+
+    with client.websocket_connect("/ws/system") as ws_sys:
+        sys_msg = ws_sys.receive_json()
+        assert sys_msg["type"] == "system"
+        assert sys_msg["execution_mode"] == "SIMULATION"
+        assert "selected_strategy_id" in sys_msg
+

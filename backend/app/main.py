@@ -53,8 +53,10 @@ from app.schemas import (
     ReplayStateResponse,
     ReplayStepRequest,
     RiskPolicySchema,
+    SelectStrategyRequest,
     SignalResponse,
     StrategyParameters,
+    StrategySelectionReportSchema,
     TradingStateResponse,
     TrainModelRequest,
 )
@@ -96,8 +98,8 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(
         title=settings.app_name,
-        version="5.0.0",
-        description="IQ Trading AI Hybrid FastAPI Backend (Phase 5 Execution Lifecycle & Reconciliation)",
+        version="6.0.0",
+        description="IQ Trading AI Hybrid FastAPI Backend (Phase 6 Strategy Selector, WebSockets & Indicators)",
         lifespan=lifespan,
     )
 
@@ -515,6 +517,60 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         return StrategyParameters(**asdict(updated))
 
     @application.get(
+        "/api/v1/strategies",
+        response_model=StrategySelectionReportSchema,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Strategy"],
+    )
+    async def list_strategy_modules(
+        instrument: str = Query(default="EUR/USD", min_length=3, max_length=20),
+        timeframe: str = Query(default="1m", pattern=r"^(1m|5m|15m)$"),
+        db: Session = Depends(get_db),
+    ) -> StrategySelectionReportSchema:
+        if not INSTRUMENT_PATTERN.match(instrument):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid instrument format.")
+        candles = HistoricalCandleRepository.get_candles(db, instrument, timeframe, limit=120)
+        if len(candles) < 60:
+            candles = await connector.get_candles(instrument=instrument, timeframe=timeframe, limit=120)
+        active = replace(strategy_engine.get_active_strategy(), instrument=instrument, timeframe=timeframe)
+        snap = TechnicalAnalysisEngine.analyze(candles, active)
+        orders = db.query(OrderRecordModel).order_by(OrderRecordModel.created_at.desc()).limit(100).all()
+        report = strategy_engine.build_report(candles=candles, current_regime=snap.regime, orders=orders)
+        return StrategySelectionReportSchema.from_domain(report)
+
+    @application.post(
+        "/api/v1/strategies/select",
+        response_model=StrategySelectionReportSchema,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Strategy"],
+    )
+    async def select_strategy_module(
+        payload: SelectStrategyRequest,
+        db: Session = Depends(get_db),
+    ) -> StrategySelectionReportSchema:
+        if not INSTRUMENT_PATTERN.match(payload.instrument):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid instrument format.")
+        candles = HistoricalCandleRepository.get_candles(db, payload.instrument, payload.timeframe, limit=120)
+        if len(candles) < 60:
+            candles = await connector.get_candles(instrument=payload.instrument, timeframe=payload.timeframe, limit=120)
+        active = replace(strategy_engine.get_active_strategy(), instrument=payload.instrument, timeframe=payload.timeframe)
+        snap = TechnicalAnalysisEngine.analyze(candles, active)
+        orders = db.query(OrderRecordModel).order_by(OrderRecordModel.created_at.desc()).limit(100).all()
+        try:
+            report = strategy_engine.select_strategy(
+                candles=candles,
+                current_regime=snap.regime,
+                strategy_id=payload.strategy_id,
+                auto_select=payload.auto_select,
+                orders=orders,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return StrategySelectionReportSchema.from_domain(report)
+
+    @application.get(
         "/api/v1/state",
         response_model=TradingStateResponse,
         dependencies=[Depends(verify_bearer_token)],
@@ -768,6 +824,103 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                     }
                 )
                 await asyncio.sleep(1.2)
+        except WebSocketDisconnect:
+            return
+
+    def _is_ws_authorized(websocket: WebSocket) -> bool:
+        expected_token = settings.api_bearer_token.strip()
+        if not expected_token:
+            return True
+        auth_header = websocket.headers.get("authorization", "")
+        token = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
+        return bool(token and hmac.compare_digest(token.encode("utf-8"), expected_token.encode("utf-8")))
+
+    def _open_ws_db() -> tuple[Session, object]:
+        provider = application.dependency_overrides.get(get_db, get_db)
+        gen = provider()
+        return next(gen), gen
+
+    @application.websocket("/ws/signals")
+    async def signals_stream(
+        websocket: WebSocket,
+        instrument: str = Query(default="EUR/USD"),
+        timeframe: str = Query(default="1m"),
+    ) -> None:
+        if not _is_ws_authorized(websocket):
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        if not INSTRUMENT_PATTERN.match(instrument) or not TIMEFRAME_PATTERN.match(timeframe):
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        await websocket.accept()
+        try:
+            while True:
+                candles = await connector.get_candles(instrument=instrument, timeframe=timeframe, limit=80)
+                active = replace(strategy_engine.get_active_strategy(), instrument=instrument, timeframe=timeframe)
+                snap = TechnicalAnalysisEngine.analyze(candles, active)
+                db, gen = _open_ws_db()
+                try:
+                    report = strategy_engine.build_report(candles=candles, current_regime=snap.regime)
+                    sig = ml_inference.infer_signal(
+                        db=db,
+                        instrument=instrument,
+                        timeframe=timeframe,
+                        candles_1m=candles,
+                        snapshot_1m=snap,
+                        mtf_report=None,
+                        strategy=active,
+                    )
+                finally:
+                    gen.close()
+
+                await websocket.send_json(
+                    {
+                        "type": "signal",
+                        "instrument": instrument,
+                        "timeframe": timeframe,
+                        "selected_strategy_id": report.selected_strategy_id,
+                        "selected_strategy_name": report.selected_strategy_name,
+                        "signal": SignalResponse.from_domain(sig).model_dump(mode="json"),
+                    }
+                )
+                await asyncio.sleep(2.5)
+        except WebSocketDisconnect:
+            return
+
+    @application.websocket("/ws/system")
+    async def system_stream(websocket: WebSocket) -> None:
+        if not _is_ws_authorized(websocket):
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        await websocket.accept()
+        try:
+            while True:
+                db, gen = _open_ws_db()
+                try:
+                    state = TradeExecutionEngine.get_or_create_state(db)
+                    policy = TradeExecutionEngine.get_or_create_policy(db)
+                    unresolved = TradeExecutionEngine.count_unresolved_orders(db)
+                    mode_val = state.execution_mode
+                    emergency = policy.emergency_stopped
+                finally:
+                    gen.close()
+
+                await websocket.send_json(
+                    {
+                        "type": "system",
+                        "execution_mode": mode_val,
+                        "connector": connector.name,
+                        "connector_connected": connector.connected,
+                        "live_authorized": bool(connector.live_authorized and settings.allow_live_trading),
+                        "emergency_stopped": emergency,
+                        "unresolved_orders_count": unresolved,
+                        "selected_strategy_id": strategy_engine.selected_strategy_id,
+                        "auto_select_strategy": strategy_engine.auto_select_enabled,
+                    }
+                )
+                await asyncio.sleep(3.0)
         except WebSocketDisconnect:
             return
 

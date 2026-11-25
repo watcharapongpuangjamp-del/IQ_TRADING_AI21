@@ -260,4 +260,149 @@ class TradingEnginesUnitTest {
         assertEquals(1, parsedReconcile?.checkedCount)
         assertEquals(1, parsedReconcile?.settledCount)
     }
+
+    @Test
+    fun phase6_technicalAnalysis_computesAdxStochasticVwap_andReliability() {
+        val strategy = StrategyConfig(instrument = "EUR/USD")
+        val now = 1_700_000_000_000L
+        val trendWithVol = (0 until 90).map { i ->
+            val base = 1.0800 + i * 0.00015
+            com.example.model.Candle(
+                timestampMillis = now + i * 60_000L,
+                open = base - 0.00005,
+                high = base + 0.00014,
+                low = base - 0.00008,
+                close = base + 0.00008,
+                volume = 120.0 + i
+            )
+        }
+        val snap = TechnicalAnalysisEngine.analyze(trendWithVol, strategy)
+        assertTrue("ADX must be positive on strong trend, got ${snap.adx}", snap.adx >= 18.0)
+        assertTrue("+DI should exceed -DI in uptrend", snap.plusDi > snap.minusDi)
+        assertTrue("Stochastic K in 0..100", snap.stochasticK in 0.0..100.0)
+        assertTrue("Stochastic D in 0..100", snap.stochasticD in 0.0..100.0)
+        assertTrue("VWAP should be reliable when volume > 0", snap.vwapReliable)
+        assertTrue("VWAP should be positive", snap.vwap > 0.0)
+        assertTrue(
+            "Regime should be STRONG_TREND, BREAKOUT, WEAK_TREND, or TRENDING_UP (got ${snap.regime})",
+            snap.regime in setOf(
+                com.example.model.MarketRegime.STRONG_TREND,
+                com.example.model.MarketRegime.WEAK_TREND,
+                com.example.model.MarketRegime.BREAKOUT,
+                com.example.model.MarketRegime.TRENDING_UP
+            )
+        )
+
+        val zeroVolCandles = trendWithVol.map { it.copy(volume = 0.0) }
+        val snapNoVol = TechnicalAnalysisEngine.analyze(zeroVolCandles, strategy)
+        assertFalse("VWAP must not be reliable when volume is missing", snapNoVol.vwapReliable)
+    }
+
+    @Test
+    fun phase6_localStrategySelectorEngine_evaluatesEightModules_andSupportsPinning() {
+        val sim = MarketSimulationEngine()
+        val candles = sim.generateInitialCandles("EUR/USD", 60, 120)
+        val snap = TechnicalAnalysisEngine.analyze(candles, StrategyConfig())
+
+        val autoReport = com.example.engine.LocalStrategySelectorEngine.evaluate(
+            candles = candles,
+            currentRegime = snap.regime,
+            settledTrades = emptyList(),
+            autoSelect = true,
+            pinnedStrategyId = null
+        )
+        assertEquals(8, autoReport.strategies.size)
+        assertEquals(1, autoReport.strategies.count { it.selected })
+        assertTrue(autoReport.autoSelected)
+        autoReport.strategies.forEach { mod ->
+            assertTrue(mod.winRate in 0.0..100.0)
+            assertTrue(mod.profitFactor >= 0.0)
+            assertTrue(mod.selectionScore in 0.0..100.0)
+        }
+
+        val pinnedReport = com.example.engine.LocalStrategySelectorEngine.evaluate(
+            candles = candles,
+            currentRegime = snap.regime,
+            settledTrades = emptyList(),
+            autoSelect = false,
+            pinnedStrategyId = "rsi_reversal"
+        )
+        assertFalse(pinnedReport.autoSelected)
+        assertEquals("rsi_reversal", pinnedReport.selectedStrategyId)
+        assertTrue(pinnedReport.strategies.first { it.strategyId == "rsi_reversal" }.selected)
+    }
+
+    @Test
+    fun phase6_offlineSyncQueueBackoff_andMultiChannelWsHelpers() {
+        val baseTime = 1_700_000_000_000L
+        assertEquals(
+            baseTime + 2_000L,
+            com.example.data.local.OfflineSyncQueueManager.computeNextRetryMillis(baseTime, 1)
+        )
+        assertEquals(
+            baseTime + 4_000L,
+            com.example.data.local.OfflineSyncQueueManager.computeNextRetryMillis(baseTime, 2)
+        )
+        assertEquals(
+            baseTime + 300_000L,
+            com.example.data.local.OfflineSyncQueueManager.computeNextRetryMillis(baseTime, 10)
+        )
+
+        val client = com.example.data.remote.BackendConnectorClient()
+        assertEquals(
+            "wss://iq.example.com/ws/signals?instrument=EUR/USD&timeframe=1m",
+            client.resolveChannelWsUrl("https://iq.example.com", "", "/ws/signals?instrument=EUR/USD&timeframe=1m")
+        )
+        assertEquals(
+            "ws://10.0.2.2:8000/ws/system",
+            client.resolveChannelWsUrl("", "ws://10.0.2.2:8000/ws/market/EUR/USD", "/ws/system")
+        )
+        assertEquals(1_000L, client.computeWsReconnectDelayMs(0))
+        assertEquals(2_000L, client.computeWsReconnectDelayMs(1))
+        assertEquals(30_000L, client.computeWsReconnectDelayMs(10))
+
+        val sigWsJson = """
+            {
+              "type": "signal",
+              "instrument": "EUR/USD",
+              "timeframe": "1m",
+              "selected_strategy_id": "ema_trend_following",
+              "selected_strategy_name": "EMA Trend Following",
+              "signal": {
+                "instrument": "EUR/USD",
+                "timeframe": "1m",
+                "direction": "CALL",
+                "calibrated_probability": 0.63,
+                "confidence_score": 74,
+                "supporting_evidence": ["ADX 28.4 (+DI > -DI)"],
+                "contradicting_evidence": [],
+                "market_regime": "STRONG_TREND",
+                "risk_assessment": "OK",
+                "explanation": "Strong uptrend",
+                "expires_at_ms": 1700000060000
+              }
+            }
+        """.trimIndent()
+        val parsedSig = client.parseWebSocketSignalJson(sigWsJson)
+        assertEquals("ema_trend_following", parsedSig?.selected_strategy_id)
+        assertEquals(TradeDirection.CALL, parsedSig?.signal?.toDomain()?.direction)
+
+        val sysWsJson = """
+            {
+              "type": "system",
+              "execution_mode": "SIMULATION",
+              "connector": "simulation_connector",
+              "connector_connected": true,
+              "live_authorized": false,
+              "emergency_stopped": false,
+              "unresolved_orders_count": 1,
+              "selected_strategy_id": "regime_adaptive",
+              "auto_select_strategy": true
+            }
+        """.trimIndent()
+        val parsedSys = client.parseWebSocketSystemJson(sysWsJson)
+        assertEquals(1, parsedSys?.unresolved_orders_count)
+        assertTrue(parsedSys?.auto_select_strategy == true)
+    }
 }
+

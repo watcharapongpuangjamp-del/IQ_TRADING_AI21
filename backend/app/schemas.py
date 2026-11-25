@@ -13,6 +13,8 @@ from app.domain import (
     RiskPolicyConfig,
     SignalResult,
     StrategyConfig,
+    StrategyModuleProfile,
+    StrategySelectionReport,
     TechnicalSnapshot,
     TimeframeIntelligence,
     TradeDirection,
@@ -80,6 +82,13 @@ class TechnicalSnapshotSchema(BaseModel):
     resistance_level: float
     candlestick_pattern: str
     regime: MarketRegime
+    adx: float = 0.0
+    plus_di: float = 0.0
+    minus_di: float = 0.0
+    stochastic_k: float = 50.0
+    stochastic_d: float = 50.0
+    vwap: float = 0.0
+    vwap_reliable: bool = False
 
     @classmethod
     def from_domain(cls, snap: TechnicalSnapshot) -> "TechnicalSnapshotSchema":
@@ -102,6 +111,13 @@ class TechnicalSnapshotSchema(BaseModel):
             resistance_level=snap.resistance_level,
             candlestick_pattern=snap.candlestick_pattern,
             regime=snap.regime,
+            adx=snap.adx,
+            plus_di=snap.plus_di,
+            minus_di=snap.minus_di,
+            stochastic_k=snap.stochastic_k,
+            stochastic_d=snap.stochastic_d,
+            vwap=snap.vwap,
+            vwap_reliable=snap.vwap_reliable,
         )
 
 
@@ -411,3 +427,91 @@ class ModelRegistryItemResponse(BaseModel):
             created_at=row.created_at,
             promoted_at=row.promoted_at,
         )
+
+
+class StrategyModuleSchema(BaseModel):
+    strategy_id: str
+    name: str
+    description: str
+    target_regimes: List[str]
+    entry_conditions: str
+    exit_conditions: str
+    risk_parameters: str
+    win_rate: float
+    profit_factor: float
+    max_drawdown: float
+    sample_count: int
+    expected_value: float
+    regime_fit_score: float
+    selection_score: float
+    selected: bool = False
+    default_config: StrategyParameters
+
+    @classmethod
+    def from_domain(cls, item: StrategyModuleProfile) -> "StrategyModuleSchema":
+        cfg = item.default_config
+        return cls(
+            strategy_id=item.strategy_id,
+            name=item.name,
+            description=item.description,
+            target_regimes=item.target_regimes,
+            entry_conditions=item.entry_conditions,
+            exit_conditions=item.exit_conditions,
+            risk_parameters=item.risk_parameters,
+            win_rate=item.win_rate,
+            profit_factor=item.profit_factor,
+            max_drawdown=item.max_drawdown,
+            sample_count=item.sample_count,
+            expected_value=item.expected_value,
+            regime_fit_score=item.regime_fit_score,
+            selection_score=item.selection_score,
+            selected=item.selected,
+            default_config=StrategyParameters(
+                name=cfg.name,
+                instrument=cfg.instrument,
+                timeframe=cfg.timeframe,
+                trade_amount=cfg.trade_amount,
+                expiry_seconds=cfg.expiry_seconds,
+                rsi_period=cfg.rsi_period,
+                rsi_oversold=cfg.rsi_oversold,
+                rsi_overbought=cfg.rsi_overbought,
+                ema_fast=cfg.ema_fast,
+                ema_slow=cfg.ema_slow,
+                sma_fast=cfg.sma_fast,
+                sma_slow=cfg.sma_slow,
+                macd_fast=cfg.macd_fast,
+                macd_slow=cfg.macd_slow,
+                macd_signal=cfg.macd_signal,
+                bb_period=cfg.bb_period,
+                bb_std_dev=cfg.bb_std_dev,
+                min_confidence=cfg.min_confidence,
+            ),
+        )
+
+
+class StrategySelectionReportSchema(BaseModel):
+    selected_strategy_id: str
+    selected_strategy_name: str
+    auto_selected: bool
+    current_regime: MarketRegime
+    selection_reason: str
+    strategies: List[StrategyModuleSchema]
+
+    @classmethod
+    def from_domain(cls, report: StrategySelectionReport) -> "StrategySelectionReportSchema":
+        return cls(
+            selected_strategy_id=report.selected_strategy_id,
+            selected_strategy_name=report.selected_strategy_name,
+            auto_selected=report.auto_selected,
+            current_regime=report.current_regime,
+            selection_reason=report.selection_reason,
+            strategies=[StrategyModuleSchema.from_domain(s) for s in report.strategies],
+        )
+
+
+class SelectStrategyRequest(BaseModel):
+    strategy_id: Optional[str] = None
+    auto_select: bool = True
+    instrument: str = Field(default="EUR/USD", min_length=3, max_length=20)
+    timeframe: str = Field(default="1m", pattern="^(1m|5m|15m)$")
+

@@ -50,6 +50,13 @@ class MarketRegime(str, Enum):
     TRENDING_DOWN = "TRENDING_DOWN"
     RANGING = "RANGING"
     HIGH_VOLATILITY = "HIGH_VOLATILITY"
+    STRONG_TREND = "STRONG_TREND"
+    WEAK_TREND = "WEAK_TREND"
+    SIDEWAYS = "SIDEWAYS"
+    LOW_VOLATILITY = "LOW_VOLATILITY"
+    BREAKOUT = "BREAKOUT"
+    REVERSAL = "REVERSAL"
+    UNKNOWN = "UNKNOWN"
 
 
 class AlignmentState(str, Enum):
@@ -89,6 +96,36 @@ class StrategyConfig:
 
 
 @dataclass(frozen=True)
+class StrategyModuleProfile:
+    strategy_id: str
+    name: str
+    description: str
+    target_regimes: List[str]
+    entry_conditions: str
+    exit_conditions: str
+    risk_parameters: str
+    win_rate: float
+    profit_factor: float
+    max_drawdown: float
+    sample_count: int
+    expected_value: float
+    regime_fit_score: float
+    selection_score: float
+    selected: bool = False
+    default_config: StrategyConfig = field(default_factory=StrategyConfig)
+
+
+@dataclass(frozen=True)
+class StrategySelectionReport:
+    selected_strategy_id: str
+    selected_strategy_name: str
+    auto_selected: bool
+    current_regime: MarketRegime
+    selection_reason: str
+    strategies: List[StrategyModuleProfile]
+
+
+@dataclass(frozen=True)
 class TechnicalSnapshot:
     rsi: float
     macd_line: float
@@ -108,6 +145,13 @@ class TechnicalSnapshot:
     regime: MarketRegime
     sma_fast: float = 0.0
     sma_slow: float = 0.0
+    adx: float = 0.0
+    plus_di: float = 0.0
+    minus_di: float = 0.0
+    stochastic_k: float = 50.0
+    stochastic_d: float = 50.0
+    vwap: float = 0.0
+    vwap_reliable: bool = False
 
 
 @dataclass(frozen=True)

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.CachedCandleEntity
 import com.example.data.local.LocalTradeCacheEntity
+import com.example.data.local.OfflineSyncQueueManager
 import com.example.data.local.TradingDao
 import com.example.data.remote.BackendConnectorClient
 import com.example.data.remote.MarketIntelligenceResponseDto
@@ -12,6 +13,7 @@ import com.example.data.remote.OrderSubmitRequestDto
 import com.example.data.remote.ReplayEvaluationResponseDto
 import com.example.data.remote.TelegramNotifier
 import com.example.data.repository.TradingCloudRepository
+import com.example.engine.LocalStrategySelectorEngine
 import com.example.engine.MarketSimulationEngine
 import com.example.engine.MultiTimeframeLocalEngine
 import com.example.engine.RiskManagementEngine
@@ -25,8 +27,10 @@ import com.example.model.DataQualitySummary
 import com.example.model.ExecutionMode
 import com.example.model.ExecutionStage
 import com.example.model.IntegrationSettings
+import com.example.model.MarketRegime
 import com.example.model.MlModelSummary
 import com.example.model.MultiTimeframeReport
+import com.example.model.OfflineSyncStatus
 import com.example.model.OrderLifecycleEvent
 import com.example.model.OrderLifecycleState
 import com.example.model.ReplaySessionState
@@ -35,6 +39,7 @@ import com.example.model.RiskValidationResult
 import com.example.model.SUPPORTED_INSTRUMENTS
 import com.example.model.SignalAnalysis
 import com.example.model.StrategyConfig
+import com.example.model.StrategySelectionReport
 import com.example.model.StreamTransportMode
 import com.example.model.TechnicalSnapshot
 import com.example.model.Timeframe
@@ -42,6 +47,7 @@ import com.example.model.TradeDirection
 import com.example.model.TradeRecord
 import com.example.model.TradeStatus
 import com.example.model.UserProfile
+import com.example.model.WebSocketConnectionState
 import com.example.security.SecureCredentialVault
 import com.example.ui.notifications.TradingNotificationHelper
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -87,7 +93,13 @@ data class TerminalUiState(
     val unresolvedOrdersCount: Int = 0,
     val isReconciling: Boolean = false,
     val lastOrderCorrelationId: String? = null,
-    val lastOrderLifecycleState: OrderLifecycleState? = null
+    val lastOrderLifecycleState: OrderLifecycleState? = null,
+    val strategyReport: StrategySelectionReport? = null,
+    val isStrategyBusy: Boolean = false,
+    val autoSelectStrategy: Boolean = true,
+    val pinnedStrategyId: String? = null,
+    val wsState: WebSocketConnectionState = WebSocketConnectionState(),
+    val offlineSyncStatus: OfflineSyncStatus = OfflineSyncStatus()
 )
 
 class TradingViewModel(
@@ -103,6 +115,7 @@ class TradingViewModel(
 ) : ViewModel() {
 
     private val simEngine = MarketSimulationEngine()
+    private val syncQueueManager = OfflineSyncQueueManager(tradingDao, cloudRepository)
     private val _terminalState = MutableStateFlow(TerminalUiState())
     val terminalState: StateFlow<TerminalUiState> = _terminalState.asStateFlow()
 
@@ -172,6 +185,29 @@ class TradingViewModel(
         viewModelScope.launch {
             cloudRepository.ensureUserBootstrap(currentUserId, userDisplayName, userEmail)
                 .onFailure { _snackbarMessage.value = "ซิงค์เริ่มต้นไม่สำเร็จ: ${it.localizedMessage}" }
+            flushOfflineSyncQueue(forceRetryFailed = false, notifyUser = false)
+        }
+        viewModelScope.launch {
+            tradingDao.observePendingSyncCount(currentUserId).collect { pending ->
+                _terminalState.update {
+                    it.copy(offlineSyncStatus = it.offlineSyncStatus.copy(pendingCount = pending))
+                }
+            }
+        }
+        viewModelScope.launch {
+            tradingDao.observeFailedSyncCount(currentUserId).collect { failed ->
+                _terminalState.update {
+                    it.copy(offlineSyncStatus = it.offlineSyncStatus.copy(failedCount = failed))
+                }
+            }
+        }
+        viewModelScope.launch {
+            while (isActive) {
+                delay(20_000L)
+                if (_terminalState.value.offlineSyncStatus.pendingCount > 0) {
+                    flushOfflineSyncQueue(forceRetryFailed = false, notifyUser = false)
+                }
+            }
         }
         startMarketStream()
     }
@@ -228,6 +264,15 @@ class TradingViewModel(
                     remoteIntel = backendClient.fetchMarketIntelligence(settings.backendBaseUrl, token, instrument).getOrNull()
                     refreshMlModelsInternal(settings.backendBaseUrl, token, instrument)
                     refreshBackendExecutionState(settings.backendBaseUrl, token)
+                    backendClient.fetchStrategyModules(settings.backendBaseUrl, token, instrument, tf.code, currentUserId)
+                        .onSuccess { report ->
+                            _terminalState.update {
+                                it.copy(
+                                    strategyReport = report,
+                                    autoSelectStrategy = report.autoSelected
+                                )
+                            }
+                        }
                 }
             }
 
@@ -242,8 +287,26 @@ class TradingViewModel(
             )
 
             if (transport != StreamTransportMode.LOCAL_SIMULATION && wsUrl != null) {
-                connectWebSocketWithFallback(wsUrl, settings.backendBaseUrl, token, instrument, tf)
+                connectWebSocketWithFallback(
+                    wsUrl = wsUrl,
+                    baseUrl = settings.backendBaseUrl,
+                    explicitWsUrl = settings.backendWsUrl,
+                    token = token,
+                    instrument = instrument,
+                    tf = tf
+                )
             } else {
+                _terminalState.update {
+                    it.copy(
+                        wsState = WebSocketConnectionState(
+                            marketConnected = false,
+                            signalConnected = false,
+                            systemConnected = false,
+                            reconnectAttempt = 0,
+                            isFallbackPolling = false
+                        )
+                    )
+                }
                 runLocalSimulationLoop()
             }
         }
@@ -252,21 +315,54 @@ class TradingViewModel(
     private suspend fun connectWebSocketWithFallback(
         wsUrl: String,
         baseUrl: String,
+        explicitWsUrl: String,
         token: String?,
         instrument: String,
         tf: Timeframe
     ) {
         var wsFailed = false
         var reconnectAttempt = 0
+        val signalWsUrl = backendClient.resolveChannelWsUrl(
+            baseUrl = baseUrl,
+            explicitWsUrl = explicitWsUrl,
+            channelPath = "/ws/signals?instrument=$instrument&timeframe=${tf.code}"
+        )
+        val systemWsUrl = backendClient.resolveChannelWsUrl(
+            baseUrl = baseUrl,
+            explicitWsUrl = explicitWsUrl,
+            channelPath = "/ws/system"
+        )
 
-        while (viewModelScope.isActive && reconnectAttempt <= 2) {
+        while (viewModelScope.isActive && reconnectAttempt <= 3) {
             wsFailed = false
+            _terminalState.update {
+                it.copy(
+                    wsState = it.wsState.copy(
+                        reconnectAttempt = reconnectAttempt,
+                        isFallbackPolling = false
+                    )
+                )
+            }
+
             backendClient.connectTickStream(
                 wsUrl = wsUrl,
                 bearerToken = token,
                 onOpen = {
                     reconnectAttempt = 0
-                    _terminalState.update { it.copy(streamTransport = StreamTransportMode.FASTAPI_WEBSOCKET) }
+                    _terminalState.update {
+                        it.copy(
+                            streamTransport = StreamTransportMode.FASTAPI_WEBSOCKET,
+                            wsState = it.wsState.copy(
+                                marketConnected = true,
+                                reconnectAttempt = 0,
+                                isFallbackPolling = false,
+                                lastError = null
+                            )
+                        )
+                    }
+                    viewModelScope.launch {
+                        flushOfflineSyncQueue(forceRetryFailed = false, notifyUser = false)
+                    }
                 },
                 onTick = { tick ->
                     if (_terminalState.value.replayState?.active == true) return@connectTickStream
@@ -282,24 +378,96 @@ class TradingViewModel(
                         maybeRunAutoTradeCycle()
                     }
                 },
-                onFailure = {
+                onFailure = { reason ->
                     wsFailed = true
+                    _terminalState.update {
+                        it.copy(
+                            wsState = it.wsState.copy(
+                                marketConnected = false,
+                                lastError = reason
+                            )
+                        )
+                    }
                 }
             )
+
+            if (signalWsUrl != null) {
+                backendClient.connectSignalStream(
+                    wsUrl = signalWsUrl,
+                    bearerToken = token,
+                    onOpen = {
+                        _terminalState.update {
+                            it.copy(wsState = it.wsState.copy(signalConnected = true))
+                        }
+                    },
+                    onSignal = { signalDto ->
+                        if (_terminalState.value.replayState?.active == true) return@connectSignalStream
+                        val pushedSignal = signalDto.signal?.toDomain("FastAPI WS Signal") ?: return@connectSignalStream
+                        _terminalState.update { it.copy(signalAnalysis = pushedSignal) }
+                    },
+                    onFailure = {
+                        _terminalState.update {
+                            it.copy(wsState = it.wsState.copy(signalConnected = false))
+                        }
+                    }
+                )
+            }
+
+            if (systemWsUrl != null) {
+                backendClient.connectSystemStream(
+                    wsUrl = systemWsUrl,
+                    bearerToken = token,
+                    onOpen = {
+                        _terminalState.update {
+                            it.copy(wsState = it.wsState.copy(systemConnected = true))
+                        }
+                    },
+                    onSystem = { sys ->
+                        _backendHealth.update {
+                            it.copy(
+                                connected = sys.connector_connected,
+                                connectorName = sys.connector,
+                                liveAuthorized = sys.live_authorized
+                            )
+                        }
+                        _terminalState.update {
+                            it.copy(unresolvedOrdersCount = sys.unresolved_orders_count)
+                        }
+                    },
+                    onFailure = {
+                        _terminalState.update {
+                            it.copy(wsState = it.wsState.copy(systemConnected = false))
+                        }
+                    }
+                )
+            }
 
             while (viewModelScope.isActive && !wsFailed) {
                 delay(1500L)
             }
             if (!viewModelScope.isActive) return
             reconnectAttempt++
-            if (reconnectAttempt <= 2) {
-                delay(1500L * reconnectAttempt)
+            if (reconnectAttempt <= 3) {
+                _terminalState.update {
+                    it.copy(wsState = it.wsState.copy(reconnectAttempt = reconnectAttempt))
+                }
+                delay(backendClient.computeWsReconnectDelayMs(reconnectAttempt - 1))
             }
         }
 
         // Graceful fallback to local simulation if WebSocket stays down
         backendClient.disconnectTickStream()
-        _terminalState.update { it.copy(streamTransport = StreamTransportMode.LOCAL_SIMULATION) }
+        _terminalState.update {
+            it.copy(
+                streamTransport = StreamTransportMode.LOCAL_SIMULATION,
+                wsState = it.wsState.copy(
+                    marketConnected = false,
+                    signalConnected = false,
+                    systemConnected = false,
+                    isFallbackPolling = true
+                )
+            )
+        }
         runLocalSimulationLoop()
     }
 
@@ -347,7 +515,22 @@ class TradingViewModel(
         remoteIntel: MarketIntelligenceResponseDto?
     ) {
         val strategy = activeStrategy()
-        val snapshot = TechnicalAnalysisEngine.analyze(candles, strategy)
+        val localSnapshot = TechnicalAnalysisEngine.analyze(candles, strategy)
+        val remoteSnap = remoteIntel?.signal?.technical_snapshot
+        val snapshot = if (remoteSnap != null) {
+            localSnapshot.copy(
+                adx = if (remoteSnap.adx > 0.0) remoteSnap.adx else localSnapshot.adx,
+                plusDi = if (remoteSnap.plus_di > 0.0) remoteSnap.plus_di else localSnapshot.plusDi,
+                minusDi = if (remoteSnap.minus_di > 0.0) remoteSnap.minus_di else localSnapshot.minusDi,
+                stochasticK = remoteSnap.stochastic_k.takeIf { it in 0.0..100.0 } ?: localSnapshot.stochasticK,
+                stochasticD = remoteSnap.stochastic_d.takeIf { it in 0.0..100.0 } ?: localSnapshot.stochasticD,
+                vwap = if (remoteSnap.vwap > 0.0) remoteSnap.vwap else localSnapshot.vwap,
+                vwapReliable = remoteSnap.vwap_reliable || localSnapshot.vwapReliable,
+                regime = MarketRegime.safeValueOf(remoteSnap.regime)
+            )
+        } else {
+            localSnapshot
+        }
         val localSignal = SignalEngine.evaluate(candles, snapshot, strategy)
         val signal = remoteIntel?.signal?.toDomain() ?: localSignal
         val mtfReport = remoteIntel?.mtf_report?.toDomain()
@@ -371,6 +554,19 @@ class TradingViewModel(
             lastLossTimestampMillis = _terminalState.value.lastLossTimestampMillis
         )
 
+        val currentReport = _terminalState.value.strategyReport
+        val updatedReport = if (transport == StreamTransportMode.LOCAL_SIMULATION || currentReport == null) {
+            LocalStrategySelectorEngine.evaluate(
+                candles = candles,
+                currentRegime = snapshot.regime,
+                settledTrades = currentTrades(),
+                autoSelect = _terminalState.value.autoSelectStrategy,
+                pinnedStrategyId = _terminalState.value.pinnedStrategyId
+            )
+        } else {
+            currentReport
+        }
+
         _terminalState.update {
             it.copy(
                 candles = candles,
@@ -379,7 +575,8 @@ class TradingViewModel(
                 mtfReport = mtfReport,
                 dataQuality = dataQuality,
                 streamTransport = transport,
-                riskValidation = riskCheck
+                riskValidation = riskCheck,
+                strategyReport = updatedReport
             )
         }
     }
@@ -640,7 +837,11 @@ class TradingViewModel(
                         calibratedProbability = currentSignal.calibratedProbability,
                         explanation = "${currentSignal.explanation} [Corr: ${dto.correlation_id} | State: ${lifecycle.name}]"
                     )
-                    val localId = cloudRepository.createTrade(openTrade).getOrElse { dto.order_id }
+                    val createResult = cloudRepository.createTrade(openTrade)
+                    val localId = createResult.getOrElse { dto.order_id.ifBlank { UUID.randomUUID().toString() } }
+                    if (createResult.isFailure) {
+                        syncQueueManager.enqueueTradeCreate(localId, openTrade)
+                    }
                     persistTradeToRoom(
                         tradeId = localId,
                         strategy = strategy,
@@ -651,7 +852,8 @@ class TradingViewModel(
                         exitPrice = 0.0,
                         status = lifecycle.name,
                         pnl = 0.0,
-                        signal = currentSignal
+                        signal = currentSignal,
+                        syncedToCloud = createResult.isSuccess
                     )
                     refreshBackendExecutionState(settings.backendBaseUrl, backendToken)
                     finishPipeline(
@@ -694,7 +896,11 @@ class TradingViewModel(
                     calibratedProbability = currentSignal.calibratedProbability,
                     explanation = "${currentSignal.explanation} [Corr: ${dto.correlation_id}]"
                 )
-                val createdId = cloudRepository.createTrade(settledTrade).getOrElse { dto.order_id }
+                val createSettled = cloudRepository.createTrade(settledTrade)
+                val createdId = createSettled.getOrElse { dto.order_id.ifBlank { UUID.randomUUID().toString() } }
+                if (createSettled.isFailure) {
+                    syncQueueManager.enqueueTradeCreate(createdId, settledTrade)
+                }
                 persistTradeToRoom(
                     tradeId = createdId,
                     strategy = strategy,
@@ -705,7 +911,8 @@ class TradingViewModel(
                     exitPrice = dto.exit_price,
                     status = finalStatus.name,
                     pnl = dto.pnl,
-                    signal = currentSignal
+                    signal = currentSignal,
+                    syncedToCloud = createSettled.isSuccess
                 )
 
                 _terminalState.update { it.copy(executionStage = ExecutionStage.PERFORMANCE_EVAL) }
@@ -749,7 +956,11 @@ class TradingViewModel(
                 calibratedProbability = currentSignal.calibratedProbability,
                 explanation = currentSignal.explanation
             )
-            val createdId = cloudRepository.createTrade(pendingTrade).getOrElse { "local_${System.currentTimeMillis()}" }
+            val createPendingRes = cloudRepository.createTrade(pendingTrade)
+            val createdId = createPendingRes.getOrElse { "local_${UUID.randomUUID().toString().take(12)}" }
+            if (createPendingRes.isFailure) {
+                syncQueueManager.enqueueTradeCreate(createdId, pendingTrade)
+            }
 
             dispatchAlerts(
                 isSignal = true,
@@ -781,7 +992,16 @@ class TradingViewModel(
             val pnl = if (won) strategy.tradeAmount * spec.payoutRate else -strategy.tradeAmount
 
             _terminalState.update { it.copy(executionStage = ExecutionStage.TRADE_LOGGING) }
-            cloudRepository.settleTrade(createdId, exitPrice, finalStatus, pnl)
+            val settleRes = cloudRepository.settleTrade(createdId, exitPrice, finalStatus, pnl)
+            if (settleRes.isFailure) {
+                syncQueueManager.enqueueTradeSettle(
+                    userId = currentUserId,
+                    tradeId = createdId,
+                    exitPrice = exitPrice,
+                    status = finalStatus,
+                    pnl = pnl
+                )
+            }
             persistTradeToRoom(
                 tradeId = createdId,
                 strategy = strategy,
@@ -792,7 +1012,8 @@ class TradingViewModel(
                 exitPrice = exitPrice,
                 status = finalStatus.name,
                 pnl = pnl,
-                signal = currentSignal
+                signal = currentSignal,
+                syncedToCloud = createPendingRes.isSuccess && settleRes.isSuccess
             )
 
             _terminalState.update { it.copy(executionStage = ExecutionStage.PERFORMANCE_EVAL) }
@@ -942,7 +1163,8 @@ class TradingViewModel(
         exitPrice: Double,
         status: String,
         pnl: Double,
-        signal: SignalAnalysis
+        signal: SignalAnalysis,
+        syncedToCloud: Boolean = true
     ) {
         withContext(Dispatchers.IO) {
             tradingDao.upsertTrade(
@@ -964,9 +1186,135 @@ class TradingViewModel(
                     calibratedProbability = signal.calibratedProbability,
                     explanation = signal.explanation,
                     createdAtMillis = System.currentTimeMillis(),
-                    syncedToCloud = true
+                    syncedToCloud = syncedToCloud
                 )
             )
+        }
+    }
+
+    // --- Offline-First Sync Queue & 8-Module Strategy Selector (Phase 6) ---
+
+    fun flushOfflineSyncQueue(forceRetryFailed: Boolean = true, notifyUser: Boolean = true) {
+        viewModelScope.launch {
+            _terminalState.update {
+                it.copy(offlineSyncStatus = it.offlineSyncStatus.copy(isFlushing = true))
+            }
+            val res = syncQueueManager.flushPending(currentUserId, forceRetryFailed = forceRetryFailed)
+            _terminalState.update { state ->
+                val cur = state.offlineSyncStatus
+                state.copy(
+                    offlineSyncStatus = cur.copy(
+                        isFlushing = false,
+                        lastSyncedAtMillis = if (res.syncedCount > 0) System.currentTimeMillis() else cur.lastSyncedAtMillis,
+                        lastError = res.lastError
+                    )
+                )
+            }
+            if (notifyUser) {
+                _snackbarMessage.value = when {
+                    res.syncedCount > 0 && res.failedCount == 0 ->
+                        "ซิงค์คิวออฟไลน์สำเร็จ ${res.syncedCount} รายการขึ้น Firestore แล้ว"
+                    res.failedCount > 0 ->
+                        "ซิงค์ค้างบางส่วน (${res.syncedCount} สำเร็จ / ${res.failedCount} รอลองใหม่): ${res.lastError.orEmpty()}"
+                    else -> "ไม่มีรายการค้างซิงค์ในคิวออฟไลน์"
+                }
+            }
+        }
+    }
+
+    fun refreshStrategyModules() {
+        viewModelScope.launch {
+            _terminalState.update { it.copy(isStrategyBusy = true) }
+            val state = _terminalState.value
+            val baseUrl = integrationSettings.value.backendBaseUrl
+            val token = credentialVault.getBackendToken()
+            val remoteReport = if (_backendHealth.value.connected && backendClient.isValidHttpUrl(baseUrl)) {
+                backendClient.fetchStrategyModules(
+                    baseUrl = baseUrl,
+                    bearerToken = token,
+                    instrument = state.selectedInstrument,
+                    timeframe = state.selectedTimeframe.code,
+                    userId = currentUserId
+                ).getOrNull()
+            } else {
+                null
+            }
+
+            val finalReport = remoteReport ?: LocalStrategySelectorEngine.evaluate(
+                candles = state.candles,
+                currentRegime = state.technicalSnapshot?.regime ?: MarketRegime.SIDEWAYS,
+                settledTrades = currentTrades(),
+                autoSelect = state.autoSelectStrategy,
+                pinnedStrategyId = state.pinnedStrategyId
+            )
+
+            _terminalState.update {
+                it.copy(
+                    strategyReport = finalReport,
+                    autoSelectStrategy = finalReport.autoSelected,
+                    isStrategyBusy = false
+                )
+            }
+        }
+    }
+
+    fun selectStrategyModule(strategyId: String?, autoSelect: Boolean) {
+        viewModelScope.launch {
+            _terminalState.update {
+                it.copy(
+                    isStrategyBusy = true,
+                    autoSelectStrategy = autoSelect,
+                    pinnedStrategyId = if (autoSelect) null else strategyId
+                )
+            }
+            val state = _terminalState.value
+            val baseUrl = integrationSettings.value.backendBaseUrl
+            val token = credentialVault.getBackendToken()
+            val remoteReport = if (_backendHealth.value.connected && backendClient.isValidHttpUrl(baseUrl)) {
+                backendClient.selectStrategyModule(
+                    baseUrl = baseUrl,
+                    bearerToken = token,
+                    strategyId = strategyId,
+                    autoSelect = autoSelect,
+                    instrument = state.selectedInstrument,
+                    timeframe = state.selectedTimeframe.code,
+                    userId = currentUserId
+                ).getOrNull()
+            } else {
+                null
+            }
+
+            val finalReport = remoteReport ?: LocalStrategySelectorEngine.evaluate(
+                candles = state.candles,
+                currentRegime = state.technicalSnapshot?.regime ?: MarketRegime.SIDEWAYS,
+                settledTrades = currentTrades(),
+                autoSelect = autoSelect,
+                pinnedStrategyId = if (autoSelect) null else strategyId
+            )
+
+            _terminalState.update {
+                it.copy(
+                    strategyReport = finalReport,
+                    autoSelectStrategy = finalReport.autoSelected,
+                    pinnedStrategyId = if (finalReport.autoSelected) null else finalReport.selectedStrategyId,
+                    isStrategyBusy = false
+                )
+            }
+
+            val chosenModule = finalReport.strategies.firstOrNull { it.selected }
+            if (chosenModule != null) {
+                val existing = activeStrategy()
+                val updated = chosenModule.defaultConfig.copy(
+                    id = existing.id,
+                    userId = currentUserId,
+                    instrument = state.selectedInstrument,
+                    timeframe = state.selectedTimeframe.code,
+                    tradeAmount = existing.tradeAmount.coerceIn(1.0, currentRiskPolicy().maxTradeAmount),
+                    expirySeconds = existing.expirySeconds,
+                    active = true
+                )
+                saveStrategyConfig(updated)
+            }
         }
     }
 
@@ -985,65 +1333,75 @@ class TradingViewModel(
                     syncRiskToBackendIfConnected(updated)
                     _snackbarMessage.value = if (enabled) "เปิดระบบเทรดอัตโนมัติ (SIMULATION)" else "ปิดระบบเทรดอัตโนมัติแล้ว"
                 }
-                .onFailure { _snackbarMessage.value = "อัปเดตสถานะ Auto-Trade ไม่สำเร็จ" }
+                .onFailure {
+                    syncQueueManager.enqueueRiskPolicy(updated, currentUserId)
+                    syncRiskToBackendIfConnected(updated)
+                    _snackbarMessage.value = "บันทึกลงคิวออฟไลน์แล้ว (รออัพเดต Auto-Trade ขึ้น Cloud)"
+                }
         }
     }
 
     fun triggerEmergencyStop() {
         viewModelScope.launch {
             val policy = currentRiskPolicy()
-            cloudRepository.saveRiskPolicy(policy.copy(emergencyStopped = true, autoTradeEnabled = false))
-                .onSuccess {
-                    val baseUrl = integrationSettings.value.backendBaseUrl
-                    if (backendClient.isValidHttpUrl(baseUrl)) {
-                        backendClient.syncEmergencyStop(baseUrl, credentialVault.getBackendToken(), stopped = true)
-                    }
-                    _snackbarMessage.value = "EMERGENCY STOP ทำงานแล้ว — ระงับคำสั่งซื้อขายทั้งหมด"
-                    dispatchAlerts(
-                        isRiskAlert = true,
-                        title = "EMERGENCY STOP ACTIVATED",
-                        lines = listOf("ผู้ใช้สั่งหยุดฉุกเฉินผ่าน Mobile Terminal — ระงับคำสั่งซื้อขายทั้งหมดทันที")
-                    )
-                }
+            val updated = policy.copy(emergencyStopped = true, autoTradeEnabled = false)
+            cloudRepository.saveRiskPolicy(updated)
+                .onFailure { syncQueueManager.enqueueRiskPolicy(updated, currentUserId) }
+            val baseUrl = integrationSettings.value.backendBaseUrl
+            if (backendClient.isValidHttpUrl(baseUrl)) {
+                backendClient.syncEmergencyStop(baseUrl, credentialVault.getBackendToken(), stopped = true)
+            }
+            _snackbarMessage.value = "EMERGENCY STOP ทำงานแล้ว — ระงับคำสั่งซื้อขายทั้งหมด"
+            dispatchAlerts(
+                isRiskAlert = true,
+                title = "EMERGENCY STOP ACTIVATED",
+                lines = listOf("ผู้ใช้สั่งหยุดฉุกเฉินผ่าน Mobile Terminal — ระงับคำสั่งซื้อขายทั้งหมดทันที")
+            )
         }
     }
 
     fun resetEmergencyStop() {
         viewModelScope.launch {
             val policy = currentRiskPolicy()
-            cloudRepository.saveRiskPolicy(policy.copy(emergencyStopped = false))
-                .onSuccess {
-                    val baseUrl = integrationSettings.value.backendBaseUrl
-                    if (backendClient.isValidHttpUrl(baseUrl)) {
-                        backendClient.syncEmergencyStop(baseUrl, credentialVault.getBackendToken(), stopped = false)
-                    }
-                    _snackbarMessage.value = "ปลดล็อก Emergency Stop แล้ว (Auto-Trade ยังคงปิดอยู่)"
-                }
+            val updated = policy.copy(emergencyStopped = false)
+            cloudRepository.saveRiskPolicy(updated)
+                .onFailure { syncQueueManager.enqueueRiskPolicy(updated, currentUserId) }
+            val baseUrl = integrationSettings.value.backendBaseUrl
+            if (backendClient.isValidHttpUrl(baseUrl)) {
+                backendClient.syncEmergencyStop(baseUrl, credentialVault.getBackendToken(), stopped = false)
+            }
+            _snackbarMessage.value = "ปลดล็อก Emergency Stop แล้ว (Auto-Trade ยังคงปิดอยู่)"
         }
     }
 
     fun saveStrategyConfig(strategy: StrategyConfig) {
         viewModelScope.launch {
+            val baseUrl = integrationSettings.value.backendBaseUrl
+            if (backendClient.isValidHttpUrl(baseUrl)) {
+                backendClient.syncStrategy(baseUrl, credentialVault.getBackendToken(), strategy)
+            }
             cloudRepository.saveStrategy(strategy)
                 .onSuccess {
-                    val baseUrl = integrationSettings.value.backendBaseUrl
-                    if (backendClient.isValidHttpUrl(baseUrl)) {
-                        backendClient.syncStrategy(baseUrl, credentialVault.getBackendToken(), strategy)
-                    }
                     _snackbarMessage.value = "บันทึกกลยุทธ์ '${strategy.name}' และซิงค์แล้ว"
                 }
-                .onFailure { _snackbarMessage.value = "บันทึกกลยุทธ์ไม่สำเร็จ: ${it.localizedMessage}" }
+                .onFailure {
+                    syncQueueManager.enqueueStrategy(strategy, currentUserId)
+                    _snackbarMessage.value = "บันทึกกลยุทธ์ '${strategy.name}' ในคิวออฟไลน์แล้ว (รอซิงค์ Cloud)"
+                }
         }
     }
 
     fun saveRiskPolicyConfig(policy: RiskPolicy) {
         viewModelScope.launch {
+            syncRiskToBackendIfConnected(policy)
             cloudRepository.saveRiskPolicy(policy)
                 .onSuccess {
-                    syncRiskToBackendIfConnected(policy)
                     _snackbarMessage.value = "บันทึกนโยบาย Risk Management แล้ว"
                 }
-                .onFailure { _snackbarMessage.value = "บันทึกนโยบายไม่สำเร็จ: ${it.localizedMessage}" }
+                .onFailure {
+                    syncQueueManager.enqueueRiskPolicy(policy, currentUserId)
+                    _snackbarMessage.value = "บันทึกนโยบาย Risk ในคิวออฟไลน์แล้ว (รอซิงค์ Cloud)"
+                }
         }
     }
 
@@ -1202,19 +1560,19 @@ class TradingViewModel(
         val existing = todaySummary()
         val newNetPnl = (existing?.netPnl ?: 0.0) + pnl
         val currentDrawdown = if (newNetPnl < 0) -newNetPnl else 0.0
-        cloudRepository.upsertDailySummary(
-            DailyPnLSummary(
-                id = dateKey,
-                userId = currentUserId,
-                dateKey = dateKey,
-                totalTrades = (existing?.totalTrades ?: 0) + 1,
-                wins = (existing?.wins ?: 0) + if (won) 1 else 0,
-                losses = (existing?.losses ?: 0) + if (won) 0 else 1,
-                netPnl = newNetPnl,
-                consecutiveLosses = if (won) 0 else (existing?.consecutiveLosses ?: 0) + 1,
-                peakDrawdown = maxOf(existing?.peakDrawdown ?: 0.0, currentDrawdown)
-            )
+        val summary = DailyPnLSummary(
+            id = dateKey,
+            userId = currentUserId,
+            dateKey = dateKey,
+            totalTrades = (existing?.totalTrades ?: 0) + 1,
+            wins = (existing?.wins ?: 0) + if (won) 1 else 0,
+            losses = (existing?.losses ?: 0) + if (won) 0 else 1,
+            netPnl = newNetPnl,
+            consecutiveLosses = if (won) 0 else (existing?.consecutiveLosses ?: 0) + 1,
+            peakDrawdown = maxOf(existing?.peakDrawdown ?: 0.0, currentDrawdown)
         )
+        cloudRepository.upsertDailySummary(summary)
+            .onFailure { syncQueueManager.enqueueDailySummary(summary) }
     }
 
     private fun finishPipeline(stage: ExecutionStage, message: String) {

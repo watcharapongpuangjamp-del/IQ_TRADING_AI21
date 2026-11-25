@@ -441,7 +441,8 @@ private fun AuthenticatedTradingShell(
                                 onStepReplay = viewModel::stepReplay,
                                 onResetReplay = viewModel::resetReplay,
                                 onExitReplay = viewModel::exitReplayMode,
-                                onReconcileOrders = { viewModel.reconcileBackendOrders() }
+                                onReconcileOrders = { viewModel.reconcileBackendOrders() },
+                                onFlushSyncQueue = { viewModel.flushOfflineSyncQueue(forceRetryFailed = true, notifyUser = true) }
                             )
                         }
                         composable(NavRoutes.STRATEGY) {
@@ -457,7 +458,11 @@ private fun AuthenticatedTradingShell(
                                 onSaveRiskPolicy = viewModel::saveRiskPolicyConfig,
                                 onRefreshMlModels = viewModel::refreshMlModels,
                                 onTrainMlModel = viewModel::trainMlModel,
-                                onPromoteMlModel = viewModel::promoteMlModel
+                                onPromoteMlModel = viewModel::promoteMlModel,
+                                strategyReport = terminalState.strategyReport,
+                                isStrategyBusy = terminalState.isStrategyBusy,
+                                onRefreshStrategies = viewModel::refreshStrategyModules,
+                                onSelectStrategyModule = viewModel::selectStrategyModule
                             )
                         }
                         composable(NavRoutes.PNL) {

@@ -6,6 +6,7 @@ import com.example.model.StrategyConfig
 import com.example.model.TechnicalSnapshot
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sqrt
 
 object TechnicalAnalysisEngine {
@@ -29,7 +30,7 @@ object TechnicalAnalysisEngine {
                 supportLevel = lastClose,
                 resistanceLevel = lastClose,
                 candlestickPattern = "ข้อมูลยังไม่เพียงพอ",
-                regime = MarketRegime.RANGING
+                regime = MarketRegime.UNKNOWN
             )
         }
 
@@ -49,6 +50,9 @@ object TechnicalAnalysisEngine {
             stdDevMultiplier = strategy.bbStdDev
         )
         val atr = calculateAtr(candles, period = 14)
+        val (adx, plusDi, minusDi) = calculateAdx(candles, period = 14)
+        val (stochK, stochD) = calculateStochastic(candles, kPeriod = 14, dPeriod = 3)
+        val (vwap, vwapReliable) = calculateVwap(candles, window = 60)
 
         val lastClose = closes.last()
         val emaFastLast = emaFastSeries.lastOrNull() ?: lastClose
@@ -68,14 +72,22 @@ object TechnicalAnalysisEngine {
         val recentWindow = candles.takeLast(30)
         val supportLevel = recentWindow.minOf { it.low }
         val resistanceLevel = recentWindow.maxOf { it.high }
+        val priorWindow = if (candles.size > 2) candles.dropLast(1).takeLast(30) else candles.dropLast(1)
+        val priorSupport = priorWindow.minOfOrNull { it.low } ?: supportLevel
+        val priorResistance = priorWindow.maxOfOrNull { it.high } ?: resistanceLevel
 
         val pattern = detectCandlestickPattern(candles)
+        val bbWidthPct = if (bbMiddleLast > 0.0) ((bbUpperLast - bbLowerLast) / bbMiddleLast) * 100.0 else 0.0
         val regime = classifyMarketRegime(
-            emaFast = emaFastLast,
-            emaSlow = emaSlowLast,
             trendStrength = trendStrength,
             volatilityPct = volatilityPct,
-            bbWidthPct = if (bbMiddleLast > 0.0) ((bbUpperLast - bbLowerLast) / bbMiddleLast) * 100.0 else 0.0
+            bbWidthPct = bbWidthPct,
+            adx = adx,
+            rsi = rsiLast,
+            lastClose = lastClose,
+            priorSupport = priorSupport,
+            priorResistance = priorResistance,
+            pattern = pattern
         )
 
         return TechnicalSnapshot(
@@ -100,8 +112,24 @@ object TechnicalAnalysisEngine {
             bbUpperSeries = bbTuple.first,
             bbLowerSeries = bbTuple.third,
             rsiSeries = rsiSeries,
-            macdHistSeries = macdTuple.third
+            macdHistSeries = macdTuple.third,
+            adx = adx,
+            plusDi = plusDi,
+            minusDi = minusDi,
+            stochasticK = stochK.lastOrNull() ?: 50.0,
+            stochasticD = stochD.lastOrNull() ?: 50.0,
+            vwap = vwap,
+            vwapReliable = vwapReliable
         )
+    }
+
+    fun calculateSmaSeries(values: List<Double>, period: Int): List<Double> {
+        if (values.isEmpty()) return emptyList()
+        val p = period.coerceAtLeast(1)
+        return values.indices.map { idx ->
+            val start = max(0, idx - p + 1)
+            values.subList(start, idx + 1).average()
+        }
     }
 
     fun calculateEmaSeries(values: List<Double>, period: Int): List<Double> {
@@ -208,6 +236,107 @@ object TechnicalAnalysisEngine {
         return trueRanges.takeLast(p).average()
     }
 
+    fun calculateAdx(candles: List<Candle>, period: Int = 14): Triple<Double, Double, Double> {
+        val p = period.coerceAtLeast(2)
+        if (candles.size < p + 2) return Triple(0.0, 0.0, 0.0)
+
+        val trs = ArrayList<Double>(candles.size - 1)
+        val plusDm = ArrayList<Double>(candles.size - 1)
+        val minusDm = ArrayList<Double>(candles.size - 1)
+
+        for (i in 1 until candles.size) {
+            val curr = candles[i]
+            val prev = candles[i - 1]
+            val upMove = curr.high - prev.high
+            val downMove = prev.low - curr.low
+            val pdm = if (upMove > downMove && upMove > 0.0) upMove else 0.0
+            val mdm = if (downMove > upMove && downMove > 0.0) downMove else 0.0
+            val tr = max(curr.high - curr.low, max(abs(curr.high - prev.close), abs(curr.low - prev.close)))
+            trs.add(tr)
+            plusDm.add(pdm)
+            minusDm.add(mdm)
+        }
+
+        var smoothTr = trs.take(p).sum()
+        var smoothPdm = plusDm.take(p).sum()
+        var smoothMdm = minusDm.take(p).sum()
+
+        fun computeDiDx(st: Double, sp: Double, sm: Double): Triple<Double, Double, Double> {
+            if (st <= 1e-12) return Triple(0.0, 0.0, 0.0)
+            val pdi = 100.0 * (sp / st)
+            val mdi = 100.0 * (sm / st)
+            val denom = pdi + mdi
+            val dx = if (denom > 1e-12) 100.0 * abs(pdi - mdi) / denom else 0.0
+            return Triple(pdi, mdi, dx)
+        }
+
+        val dxValues = ArrayList<Double>()
+        var (lastPdi, lastMdi, firstDx) = computeDiDx(smoothTr, smoothPdm, smoothMdm)
+        dxValues.add(firstDx)
+
+        for (i in p until trs.size) {
+            smoothTr = smoothTr - (smoothTr / p) + trs[i]
+            smoothPdm = smoothPdm - (smoothPdm / p) + plusDm[i]
+            smoothMdm = smoothMdm - (smoothMdm / p) + minusDm[i]
+            val (pdi, mdi, dx) = computeDiDx(smoothTr, smoothPdm, smoothMdm)
+            lastPdi = pdi
+            lastMdi = mdi
+            dxValues.add(dx)
+        }
+
+        var adx = if (dxValues.size < p) {
+            dxValues.average()
+        } else {
+            var acc = dxValues.take(p).average()
+            for (i in p until dxValues.size) {
+                acc = ((acc * (p - 1)) + dxValues[i]) / p
+            }
+            acc
+        }
+        adx = min(100.0, max(0.0, adx))
+        return Triple(adx, lastPdi.coerceIn(0.0, 100.0), lastMdi.coerceIn(0.0, 100.0))
+    }
+
+    fun calculateStochastic(
+        candles: List<Candle>,
+        kPeriod: Int = 14,
+        dPeriod: Int = 3
+    ): Pair<List<Double>, List<Double>> {
+        if (candles.isEmpty()) return emptyList<Double>() to emptyList()
+        val kp = kPeriod.coerceAtLeast(2)
+        val dp = dPeriod.coerceAtLeast(1)
+        val kSeries = candles.indices.map { i ->
+            val window = candles.subList(max(0, i - kp + 1), i + 1)
+            val highest = window.maxOf { it.high }
+            val lowest = window.minOf { it.low }
+            val span = highest - lowest
+            if (span <= 1e-12) 50.0
+            else (((candles[i].close - lowest) / span) * 100.0).coerceIn(0.0, 100.0)
+        }
+        val dSeries = calculateSmaSeries(kSeries, dp)
+        return kSeries to dSeries
+    }
+
+    fun calculateVwap(candles: List<Candle>, window: Int = 60): Pair<Double, Boolean> {
+        if (candles.isEmpty()) return 0.0 to false
+        val recent = candles.takeLast(window.coerceAtLeast(1))
+        var positiveBars = 0
+        var totalPv = 0.0
+        var totalVol = 0.0
+        val typicalPrices = ArrayList<Double>(recent.size)
+        for (c in recent) {
+            val tp = (c.high + c.low + c.close) / 3.0
+            typicalPrices.add(tp)
+            if (c.volume > 0.0) {
+                positiveBars++
+                totalPv += tp * c.volume
+                totalVol += c.volume
+            }
+        }
+        val reliable = totalVol > 0.0 && (positiveBars.toDouble() / recent.size) >= 0.25
+        return if (reliable) (totalPv / totalVol) to true else typicalPrices.average() to false
+    }
+
     fun detectCandlestickPattern(candles: List<Candle>): String {
         if (candles.size < 2) return "ปกติ"
         val prev = candles[candles.size - 2]
@@ -237,17 +366,27 @@ object TechnicalAnalysisEngine {
     }
 
     private fun classifyMarketRegime(
-        emaFast: Double,
-        emaSlow: Double,
         trendStrength: Double,
         volatilityPct: Double,
-        bbWidthPct: Double
+        bbWidthPct: Double,
+        adx: Double,
+        rsi: Double,
+        lastClose: Double,
+        priorSupport: Double,
+        priorResistance: Double,
+        pattern: String
     ): MarketRegime {
         return when {
             volatilityPct > 0.35 || bbWidthPct > 1.2 -> MarketRegime.HIGH_VOLATILITY
-            trendStrength >= 0.45 && emaFast > emaSlow -> MarketRegime.TRENDING_UP
-            trendStrength >= 0.45 && emaFast < emaSlow -> MarketRegime.TRENDING_DOWN
-            else -> MarketRegime.RANGING
+            lastClose > 0.0 && priorResistance > 0.0 &&
+                (lastClose > priorResistance || lastClose < priorSupport) -> MarketRegime.BREAKOUT
+            (rsi <= 26.0 || rsi >= 74.0) &&
+                (pattern.contains("Engulfing") || pattern.contains("Hammer") || pattern.contains("Shooting Star")) ->
+                MarketRegime.REVERSAL
+            adx >= 26.0 || trendStrength >= 0.75 -> MarketRegime.STRONG_TREND
+            adx >= 18.0 || trendStrength >= 0.40 -> MarketRegime.WEAK_TREND
+            volatilityPct < 0.035 && bbWidthPct < 0.18 -> MarketRegime.LOW_VOLATILITY
+            else -> MarketRegime.SIDEWAYS
         }
     }
 }

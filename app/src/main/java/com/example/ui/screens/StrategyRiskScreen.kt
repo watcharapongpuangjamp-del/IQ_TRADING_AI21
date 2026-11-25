@@ -36,14 +36,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import com.example.model.MlModelSummary
 import com.example.model.RiskPolicy
 import com.example.model.StrategyConfig
+import com.example.model.StrategyModuleSummary
+import com.example.model.StrategySelectionReport
 import com.example.ui.components.MlGovernancePanel
 import com.example.ui.theme.LocalTradingColors
 import kotlin.math.roundToInt
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun StrategyRiskScreen(
     strategy: StrategyConfig,
@@ -58,6 +68,10 @@ fun StrategyRiskScreen(
     onRefreshMlModels: () -> Unit,
     onTrainMlModel: (String) -> Unit,
     onPromoteMlModel: (String) -> Unit,
+    strategyReport: StrategySelectionReport? = null,
+    isStrategyBusy: Boolean = false,
+    onRefreshStrategies: () -> Unit = {},
+    onSelectStrategyModule: (strategyId: String?, autoSelect: Boolean) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
@@ -128,6 +142,15 @@ fun StrategyRiskScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             if (selectedTab == 0) {
+                item {
+                    AiStrategySelectorSection(
+                        report = strategyReport,
+                        isBusy = isStrategyBusy,
+                        onRefresh = onRefreshStrategies,
+                        onSelectModule = onSelectStrategyModule
+                    )
+                }
+
                 item {
                     Surface(
                         color = tradingColors.surfaceElevated,
@@ -446,3 +469,246 @@ private fun LabeledSlider(
         )
     }
 }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AiStrategySelectorSection(
+    report: StrategySelectionReport?,
+    isBusy: Boolean,
+    onRefresh: () -> Unit,
+    onSelectModule: (strategyId: String?, autoSelect: Boolean) -> Unit
+) {
+    val tradingColors = LocalTradingColors.current
+    Surface(
+        color = tradingColors.surfaceElevated,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, tradingColors.cyan.copy(alpha = 0.45f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("ai_strategy_selector_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = "AI Strategy Selector (8 โมดูล)",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = tradingColors.cyan,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (report != null) {
+                            "สภาวะตลาด: ${report.currentRegime.labelTh} • กำลังใช้: ${report.selectedStrategyName}"
+                        } else {
+                            "กำลังเตรียมการประเมินกลยุทธ์ 8 โมดูลตาม Market Regime..."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onRefresh,
+                    enabled = !isBusy,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("refresh_strategies_button")
+                ) {
+                    Text(
+                        text = if (isBusy) "กำลังโหลด..." else "รีเฟรช 8 กลยุทธ์",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = tradingColors.cyan
+                    )
+                }
+            }
+
+            if (report != null) {
+                Surface(
+                    color = tradingColors.surfaceCanvas,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, tradingColors.cardBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = "เลือกกลยุทธ์อัตโนมัติตาม Market Regime",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = report.selectionReason,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Switch(
+                            checked = report.autoSelected,
+                            onCheckedChange = { enabled ->
+                                onSelectModule(if (enabled) null else report.selectedStrategyId, enabled)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = tradingColors.surfaceCanvas,
+                                checkedTrackColor = tradingColors.bullish
+                            ),
+                            modifier = Modifier.testTag("auto_strategy_toggle")
+                        )
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    report.strategies.forEach { mod ->
+                        StrategyModuleCard(
+                            module = mod,
+                            isBusy = isBusy,
+                            onSelect = { onSelectModule(mod.strategyId, false) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun StrategyModuleCard(
+    module: StrategyModuleSummary,
+    isBusy: Boolean,
+    onSelect: () -> Unit
+) {
+    val tradingColors = LocalTradingColors.current
+    Surface(
+        color = tradingColors.surfaceCanvas,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(
+            width = if (module.selected) 1.5.dp else 1.dp,
+            color = if (module.selected) tradingColors.bullish else tradingColors.cardBorder
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("strategy_module_card_${module.strategyId}")
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = module.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (module.selected) tradingColors.bullish else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = module.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Surface(
+                    color = if (module.selected) tradingColors.bullishContainer else tradingColors.cyanContainer,
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "Score ${String.format("%.1f", module.selectionScore)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (module.selected) tradingColors.bullish else tradingColors.cyan,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                module.targetRegimes.take(4).forEach { regime ->
+                    Surface(
+                        color = tradingColors.surfaceElevated,
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(1.dp, tradingColors.cardBorder)
+                    ) {
+                        Text(
+                            text = regime,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Win ${String.format("%.1f%%", module.winRate)} • PF ${String.format("%.2f", module.profitFactor)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tradingColors.bullish
+                )
+                Text(
+                    text = "DD ${String.format("%.1f%%", module.maxDrawdown)} • EV ${String.format("%+.2f", module.expectedValue)} (n=${module.sampleCount})",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Text(
+                text = "เงื่อนไขเข้า: ${module.entryConditions}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Button(
+                onClick = onSelect,
+                enabled = !isBusy && !module.selected,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (module.selected) tradingColors.bullishContainer else tradingColors.cyan,
+                    contentColor = if (module.selected) tradingColors.bullish else tradingColors.surfaceCanvas,
+                    disabledContainerColor = tradingColors.bullishContainer,
+                    disabledContentColor = tradingColors.bullish
+                ),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("select_strategy_${module.strategyId}")
+            ) {
+                Text(
+                    text = if (module.selected) "กำลังใช้งานกลยุทธ์นี้" else "ใช้งานกลยุทธ์นี้",
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+

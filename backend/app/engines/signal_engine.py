@@ -72,10 +72,40 @@ class AISignalEngine:
             bear_pts += 14.0
             bear_evidence.append(f"Candlestick pattern: {snapshot.candlestick_pattern}")
 
+        if snapshot.adx >= 22.0:
+            if snapshot.plus_di > snapshot.minus_di:
+                bull_pts += 12.0
+                bull_evidence.append(f"ADX ({snapshot.adx:.1f}) confirms bullish trend (+DI {snapshot.plus_di:.1f} > -DI {snapshot.minus_di:.1f})")
+            elif snapshot.minus_di > snapshot.plus_di:
+                bear_pts += 12.0
+                bear_evidence.append(f"ADX ({snapshot.adx:.1f}) confirms bearish trend (-DI {snapshot.minus_di:.1f} > +DI {snapshot.plus_di:.1f})")
+
+        if snapshot.stochastic_k <= 20.0 and snapshot.stochastic_k >= snapshot.stochastic_d:
+            bull_pts += 12.0
+            bull_evidence.append(f"Stochastic oversold bullish turn (%K {snapshot.stochastic_k:.1f} / %D {snapshot.stochastic_d:.1f})")
+        elif snapshot.stochastic_k >= 80.0 and snapshot.stochastic_k <= snapshot.stochastic_d:
+            bear_pts += 12.0
+            bear_evidence.append(f"Stochastic overbought bearish turn (%K {snapshot.stochastic_k:.1f} / %D {snapshot.stochastic_d:.1f})")
+
+        if snapshot.vwap_reliable and snapshot.vwap > 0.0:
+            if last_close > snapshot.vwap:
+                bull_pts += 8.0
+                bull_evidence.append(f"Price above reliable VWAP ({snapshot.vwap:.5f})")
+            elif last_close < snapshot.vwap:
+                bear_pts += 8.0
+                bear_evidence.append(f"Price below reliable VWAP ({snapshot.vwap:.5f})")
+
         net_diff = abs(bull_pts - bear_pts)
         dominant_bull = bull_pts >= bear_pts
-        regime_penalty = 14 if snapshot.regime == MarketRegime.HIGH_VOLATILITY else 0
-        confidence = int(max(10, min(96, round(max(bull_pts, bear_pts) * 0.65 + net_diff * 0.45 - regime_penalty))))
+        if snapshot.regime == MarketRegime.HIGH_VOLATILITY:
+            regime_penalty = 14
+        elif snapshot.regime in (MarketRegime.SIDEWAYS, MarketRegime.RANGING, MarketRegime.LOW_VOLATILITY) and net_diff < 28.0:
+            regime_penalty = 8
+        elif snapshot.regime == MarketRegime.UNKNOWN:
+            regime_penalty = 20
+        else:
+            regime_penalty = 0
+        confidence = int(max(10, min(96, round(max(bull_pts, bear_pts) * 0.62 + net_diff * 0.42 - regime_penalty))))
 
         # Calibrated win probability kept distinct and conservative compared to model confidence
         logistic = 1.0 / (1.0 + math.exp(-(confidence - 55.0) / 18.0))
@@ -85,8 +115,10 @@ class AISignalEngine:
         contradicting = list(bear_evidence if dominant_bull else bull_evidence)
         if snapshot.regime == MarketRegime.HIGH_VOLATILITY:
             contradicting.append(f"High volatility regime (ATR {snapshot.volatility_pct:.2f}%)")
+        elif snapshot.regime in (MarketRegime.SIDEWAYS, MarketRegime.RANGING):
+            contradicting.append("Sideways regime increases mean-reversion noise")
 
-        if confidence < strategy.min_confidence or net_diff < 18.0:
+        if confidence < strategy.min_confidence or net_diff < 18.0 or snapshot.regime == MarketRegime.UNKNOWN:
             direction = TradeDirection.NO_TRADE
         elif dominant_bull:
             direction = TradeDirection.CALL
@@ -94,9 +126,9 @@ class AISignalEngine:
             direction = TradeDirection.PUT
 
         explanation = (
-            f"{direction.value}: {'; '.join(supporting[:2])}"
+            f"{direction.value} [{snapshot.regime.value}]: {'; '.join(supporting[:2])}"
             if direction != TradeDirection.NO_TRADE
-            else f"NO_TRADE: Insufficient edge (confidence {confidence}% < {strategy.min_confidence}%)"
+            else f"NO_TRADE [{snapshot.regime.value}]: Insufficient edge (confidence {confidence}% < {strategy.min_confidence}%)"
         )
         risk_assessment = (
             "Signal below threshold — no execution recommended."

@@ -5,6 +5,7 @@ from app.connectors.simulation import SimulationConnector
 from app.domain import (
     AlignmentState,
     ExecutionMode,
+    MarketRegime,
     RiskPolicyConfig,
     StrategyConfig,
     TradeDirection,
@@ -381,6 +382,56 @@ class TestPurePythonEngines(unittest.TestCase):
         )
         self.assertEqual(settled_timeout.lifecycle_state, "SETTLED")
         self.assertEqual(settled_timeout.correlation_id, "corr_timeout_002")
+
+    def test_adx_stochastic_vwap_and_expanded_regimes(self) -> None:
+        strong_bull = _build_trending_candles(60, step=0.0012, start_price=1.05, tf_ms=60_000)
+        snap = TechnicalAnalysisEngine.analyze(strong_bull, self.strategy)
+        self.assertGreater(snap.adx, 20.0)
+        self.assertGreater(snap.plus_di, snap.minus_di)
+        self.assertGreaterEqual(snap.stochastic_k, 0.0)
+        self.assertLessEqual(snap.stochastic_k, 100.0)
+        self.assertGreaterEqual(snap.stochastic_d, 0.0)
+        self.assertLessEqual(snap.stochastic_d, 100.0)
+        self.assertTrue(snap.vwap_reliable)
+        self.assertGreater(snap.vwap, 0.0)
+        self.assertIn(
+            snap.regime,
+            (MarketRegime.STRONG_TREND, MarketRegime.WEAK_TREND, MarketRegime.BREAKOUT, MarketRegime.HIGH_VOLATILITY),
+        )
+
+        # Zero-volume data must flag vwap_reliable = False safely without division by zero
+        zero_vol = [{**c, "volume": 0.0} for c in strong_bull]
+        vwap_val, reliable = TechnicalAnalysisEngine.calculate_vwap(zero_vol)
+        self.assertFalse(reliable)
+        self.assertGreater(vwap_val, 0.0)
+
+    def test_eight_strategy_modules_and_regime_selection(self) -> None:
+        candles = asyncio.run(self.connector.get_candles("EUR/USD", "1m", limit=120))
+        engine = StrategySelectionEngine()
+        report_trend = engine.select_strategy(
+            candles=candles,
+            current_regime=MarketRegime.STRONG_TREND,
+            auto_select=True,
+        )
+        self.assertEqual(len(report_trend.strategies), 8)
+        self.assertTrue(report_trend.auto_selected)
+        self.assertEqual(sum(1 for s in report_trend.strategies if s.selected), 1)
+        for mod in report_trend.strategies:
+            self.assertGreaterEqual(mod.win_rate, 0.0)
+            self.assertLessEqual(mod.win_rate, 100.0)
+            self.assertGreaterEqual(mod.profit_factor, 0.0)
+            self.assertGreaterEqual(mod.max_drawdown, 0.0)
+            self.assertGreaterEqual(mod.sample_count, 0)
+
+        pinned = engine.select_strategy(
+            candles=candles,
+            current_regime=MarketRegime.SIDEWAYS,
+            strategy_id="bb_mean_reversion",
+            auto_select=False,
+        )
+        self.assertFalse(pinned.auto_selected)
+        self.assertEqual(pinned.selected_strategy_id, "bb_mean_reversion")
+        self.assertEqual(engine.get_active_strategy().name, "Bollinger Mean Reversion")
 
 
 if __name__ == "__main__":

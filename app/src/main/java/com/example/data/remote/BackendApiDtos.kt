@@ -14,6 +14,8 @@ import com.example.model.ReplaySessionState
 import com.example.model.RiskPolicy
 import com.example.model.SignalAnalysis
 import com.example.model.StrategyConfig
+import com.example.model.StrategyModuleSummary
+import com.example.model.StrategySelectionReport
 import com.example.model.TimeframeIntelligenceSummary
 import com.example.model.TradeDirection
 import com.squareup.moshi.JsonClass
@@ -74,7 +76,14 @@ data class TechnicalSnapshotDto(
     val support_level: Double = 0.0,
     val resistance_level: Double = 0.0,
     val candlestick_pattern: String = "Neutral",
-    val regime: String = MarketRegime.RANGING.name
+    val regime: String = MarketRegime.SIDEWAYS.name,
+    val adx: Double = 0.0,
+    val plus_di: Double = 0.0,
+    val minus_di: Double = 0.0,
+    val stochastic_k: Double = 50.0,
+    val stochastic_d: Double = 50.0,
+    val vwap: Double = 0.0,
+    val vwap_reliable: Boolean = false
 )
 
 @JsonClass(generateAdapter = true)
@@ -86,14 +95,14 @@ data class SignalResponseDto(
     val confidence_score: Int = 50,
     val supporting_evidence: List<String> = emptyList(),
     val contradicting_evidence: List<String> = emptyList(),
-    val market_regime: String = MarketRegime.RANGING.name,
+    val market_regime: String = MarketRegime.SIDEWAYS.name,
     val risk_assessment: String = "",
     val explanation: String = "",
     val expires_at_ms: Long = 0L,
     val technical_snapshot: TechnicalSnapshotDto? = null
 ) {
     fun toDomain(sourceLabel: String = "FastAPI Calibrated Intelligence"): SignalAnalysis {
-        val parsedRegime = MarketRegime.entries.firstOrNull { it.name == market_regime } ?: MarketRegime.RANGING
+        val parsedRegime = MarketRegime.safeValueOf(market_regime)
         val inferredLabel = when {
             explanation.contains("ML", ignoreCase = true) ||
                 supporting_evidence.any { it.contains("ML", ignoreCase = true) } -> "FastAPI Calibrated ML"
@@ -139,7 +148,7 @@ data class DataQualityReportDto(
 data class TimeframeIntelligenceDto(
     val timeframe: String = "1m",
     val trend_bias: String = "NO_TRADE",
-    val regime: String = MarketRegime.RANGING.name,
+    val regime: String = MarketRegime.SIDEWAYS.name,
     val rsi: Double = 50.0,
     val ema_fast: Double = 0.0,
     val ema_slow: Double = 0.0,
@@ -152,7 +161,7 @@ data class TimeframeIntelligenceDto(
     fun toDomain(): TimeframeIntelligenceSummary = TimeframeIntelligenceSummary(
         timeframe = timeframe,
         trendBias = TradeDirection.safeValueOf(trend_bias),
-        regime = MarketRegime.entries.firstOrNull { it.name == regime } ?: MarketRegime.RANGING,
+        regime = MarketRegime.safeValueOf(regime),
         rsi = rsi,
         emaFast = ema_fast,
         emaSlow = ema_slow,
@@ -467,3 +476,111 @@ data class ModelRegistryItemDto(
         isActive = status.equals("ACTIVE", ignoreCase = true) || model_id == activeModelId
     )
 }
+
+@JsonClass(generateAdapter = true)
+data class StrategyModuleDto(
+    val strategy_id: String,
+    val name: String,
+    val description: String = "",
+    val target_regimes: List<String> = emptyList(),
+    val entry_conditions: String = "",
+    val exit_conditions: String = "",
+    val risk_parameters: String = "",
+    val win_rate: Double = 50.0,
+    val profit_factor: Double = 1.0,
+    val max_drawdown: Double = 0.0,
+    val sample_count: Int = 0,
+    val expected_value: Double = 0.0,
+    val regime_fit_score: Double = 0.5,
+    val selection_score: Double = 50.0,
+    val selected: Boolean = false,
+    val default_config: StrategyParametersDto
+) {
+    fun toDomain(userId: String = ""): StrategyModuleSummary = StrategyModuleSummary(
+        strategyId = strategy_id,
+        name = name,
+        description = description,
+        targetRegimes = target_regimes,
+        entryConditions = entry_conditions,
+        exitConditions = exit_conditions,
+        riskParameters = risk_parameters,
+        winRate = win_rate,
+        profitFactor = profit_factor,
+        maxDrawdown = max_drawdown,
+        sampleCount = sample_count,
+        expectedValue = expected_value,
+        regimeFitScore = regime_fit_score,
+        selectionScore = selection_score,
+        selected = selected,
+        defaultConfig = StrategyConfig(
+            userId = userId,
+            name = default_config.name,
+            instrument = default_config.instrument,
+            timeframe = default_config.timeframe,
+            tradeAmount = default_config.trade_amount,
+            expirySeconds = default_config.expiry_seconds,
+            rsiPeriod = default_config.rsi_period,
+            rsiOversold = default_config.rsi_oversold,
+            rsiOverbought = default_config.rsi_overbought,
+            emaFast = default_config.ema_fast,
+            emaSlow = default_config.ema_slow,
+            macdFast = default_config.macd_fast,
+            macdSlow = default_config.macd_slow,
+            macdSignal = default_config.macd_signal,
+            bbPeriod = default_config.bb_period,
+            bbStdDev = default_config.bb_std_dev,
+            minConfidence = default_config.min_confidence,
+            active = true
+        )
+    )
+}
+
+@JsonClass(generateAdapter = true)
+data class StrategySelectionReportDto(
+    val selected_strategy_id: String = "regime_adaptive",
+    val selected_strategy_name: String = "Market Regime Adaptive",
+    val auto_selected: Boolean = true,
+    val current_regime: String = MarketRegime.SIDEWAYS.name,
+    val selection_reason: String = "",
+    val strategies: List<StrategyModuleDto> = emptyList()
+) {
+    fun toDomain(userId: String = ""): StrategySelectionReport = StrategySelectionReport(
+        selectedStrategyId = selected_strategy_id,
+        selectedStrategyName = selected_strategy_name,
+        autoSelected = auto_selected,
+        currentRegime = MarketRegime.safeValueOf(current_regime),
+        selectionReason = selection_reason,
+        strategies = strategies.map { it.toDomain(userId) }
+    )
+}
+
+@JsonClass(generateAdapter = true)
+data class SelectStrategyRequestDto(
+    val strategy_id: String? = null,
+    val auto_select: Boolean = true,
+    val instrument: String = "EUR/USD",
+    val timeframe: String = "1m"
+)
+
+@JsonClass(generateAdapter = true)
+data class WebSocketSignalDto(
+    val type: String = "signal",
+    val instrument: String = "EUR/USD",
+    val timeframe: String = "1m",
+    val selected_strategy_id: String = "",
+    val selected_strategy_name: String = "",
+    val signal: SignalResponseDto? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class WebSocketSystemDto(
+    val type: String = "system",
+    val execution_mode: String = "SIMULATION",
+    val connector: String = "simulation_connector",
+    val connector_connected: Boolean = true,
+    val live_authorized: Boolean = false,
+    val emergency_stopped: Boolean = false,
+    val unresolved_orders_count: Int = 0,
+    val selected_strategy_id: String = "",
+    val auto_select_strategy: Boolean = true
+)

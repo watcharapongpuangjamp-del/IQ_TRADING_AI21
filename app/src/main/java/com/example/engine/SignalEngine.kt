@@ -121,18 +121,51 @@ object SignalEngine {
             bearEvidence.add("ราคาใกล้แนวต้านสำคัญ (${formatPrice(snapshot.resistanceLevel)})")
         }
 
+        // 7. ADX Trend Strength (+DI / -DI)
+        if (snapshot.adx >= 22.0) {
+            if (snapshot.plusDi > snapshot.minusDi) {
+                bullPoints += 12.0
+                bullEvidence.add("ADX (${format2(snapshot.adx)}) ยืนยันเทรนด์ขึ้น (+DI ${format2(snapshot.plusDi)} > -DI ${format2(snapshot.minusDi)})")
+            } else if (snapshot.minusDi > snapshot.plusDi) {
+                bearPoints += 12.0
+                bearEvidence.add("ADX (${format2(snapshot.adx)}) ยืนยันเทรนด์ลง (-DI ${format2(snapshot.minusDi)} > +DI ${format2(snapshot.plusDi)})")
+            }
+        }
+
+        // 8. Stochastic Oscillator (%K / %D)
+        if (snapshot.stochasticK <= 20.0 && snapshot.stochasticK >= snapshot.stochasticD) {
+            bullPoints += 12.0
+            bullEvidence.add("Stochastic กลับตัวขึ้นจากเขตต่ำ (%K ${format2(snapshot.stochasticK)} / %D ${format2(snapshot.stochasticD)})")
+        } else if (snapshot.stochasticK >= 80.0 && snapshot.stochasticK <= snapshot.stochasticD) {
+            bearPoints += 12.0
+            bearEvidence.add("Stochastic กดตัวลงจากเขตสูง (%K ${format2(snapshot.stochasticK)} / %D ${format2(snapshot.stochasticD)})")
+        }
+
+        // 9. Reliable VWAP Bias
+        if (snapshot.vwapReliable && snapshot.vwap > 0.0) {
+            if (lastPrice > snapshot.vwap) {
+                bullPoints += 8.0
+                bullEvidence.add("ราคาเหนือเส้น VWAP (${formatPrice(snapshot.vwap)})")
+            } else if (lastPrice < snapshot.vwap) {
+                bearPoints += 8.0
+                bearEvidence.add("ราคาต่ำกว่าเส้น VWAP (${formatPrice(snapshot.vwap)})")
+            }
+        }
+
         val netDiff = abs(bullPoints - bearPoints)
         val dominantBull = bullPoints >= bearPoints
 
         // Volatility / Regime penalty to prevent overtrading in chaotic markets
         val regimePenalty = when (snapshot.regime) {
             MarketRegime.HIGH_VOLATILITY -> 14
-            MarketRegime.RANGING -> if (netDiff < 30.0) 8 else 0
+            MarketRegime.UNKNOWN -> 20
+            MarketRegime.SIDEWAYS, MarketRegime.RANGING, MarketRegime.LOW_VOLATILITY -> if (netDiff < 28.0) 8 else 0
             MarketRegime.TRENDING_UP -> if (dominantBull) 0 else 10
             MarketRegime.TRENDING_DOWN -> if (!dominantBull) 0 else 10
+            MarketRegime.STRONG_TREND, MarketRegime.WEAK_TREND, MarketRegime.BREAKOUT, MarketRegime.REVERSAL -> 0
         }
 
-        val rawConfidence = ((maxOf(bullPoints, bearPoints) * 0.65) + (netDiff * 0.45) - regimePenalty)
+        val rawConfidence = ((maxOf(bullPoints, bearPoints) * 0.62) + (netDiff * 0.42) - regimePenalty)
             .toInt()
             .coerceIn(10, 96)
 
@@ -148,6 +181,7 @@ object SignalEngine {
         }
 
         val direction = when {
+            snapshot.regime == MarketRegime.UNKNOWN -> TradeDirection.NO_TRADE
             rawConfidence < strategy.minConfidence -> TradeDirection.NO_TRADE
             netDiff < 18.0 -> TradeDirection.NO_TRADE
             dominantBull -> TradeDirection.CALL

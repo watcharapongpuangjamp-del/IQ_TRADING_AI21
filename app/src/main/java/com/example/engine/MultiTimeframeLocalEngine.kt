@@ -124,10 +124,12 @@ object MultiTimeframeLocalEngine {
         val closes = candles.map { it.close }
         val smaFast = if (closes.size >= 10) closes.takeLast(10).average() else closes.lastOrNull() ?: 0.0
         val smaSlow = if (closes.size >= 30) closes.takeLast(30).average() else closes.averageOrZero()
+        val adxConfirmsBull = snap.adx >= 22.0 && snap.plusDi > snap.minusDi
+        val adxConfirmsBear = snap.adx >= 22.0 && snap.minusDi > snap.plusDi
         val bias = when {
             candles.size < 8 -> TradeDirection.NO_TRADE
-            snap.emaFast > snap.emaSlow && snap.macdHistogram >= 0 -> TradeDirection.CALL
-            snap.emaFast < snap.emaSlow && snap.macdHistogram <= 0 -> TradeDirection.PUT
+            snap.emaFast > snap.emaSlow && (snap.macdHistogram >= 0 || adxConfirmsBull) -> TradeDirection.CALL
+            snap.emaFast < snap.emaSlow && (snap.macdHistogram <= 0 || adxConfirmsBear) -> TradeDirection.PUT
             snap.emaFast > snap.emaSlow -> TradeDirection.CALL
             snap.emaFast < snap.emaSlow -> TradeDirection.PUT
             else -> TradeDirection.NO_TRADE
