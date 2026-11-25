@@ -21,6 +21,28 @@ class TradeStatus(str, Enum):
     LOST = "LOST"
     REJECTED = "REJECTED"
     CANCELLED = "CANCELLED"
+    PENDING = "PENDING"
+    FAILED = "FAILED"
+    UNKNOWN = "UNKNOWN"
+
+
+class OrderLifecycleState(str, Enum):
+    CREATED = "CREATED"
+    VALIDATED = "VALIDATED"
+    AUTHORIZED = "AUTHORIZED"
+    SUBMITTED = "SUBMITTED"
+    ACCEPTED = "ACCEPTED"
+    PENDING = "PENDING"
+    SETTLED = "SETTLED"
+    REJECTED = "REJECTED"
+    FAILED = "FAILED"
+    UNKNOWN = "UNKNOWN"
+
+
+UNRESOLVED_LIFECYCLE_STATES = (
+    OrderLifecycleState.PENDING.value,
+    OrderLifecycleState.UNKNOWN.value,
+)
 
 
 class MarketRegime(str, Enum):

@@ -99,9 +99,9 @@ object MultiTimeframeLocalEngine {
             s1m.trendBias != TradeDirection.NO_TRADE &&
                 higherBias != TradeDirection.NO_TRADE &&
                 s1m.trendBias != higherBias ->
-                Triple(AlignmentState.CONFLICT, 35, "1m ขัดแย้งกับเทรนด์หลัก 5m/15m")
+                Triple(AlignmentState.CONFLICTING, 35, "1m ขัดแย้งกับเทรนด์หลัก 5m/15m")
             else ->
-                Triple(AlignmentState.NEUTRAL, 55, "กำลังสะสมแรง — รอการยืนยันจาก 5m/15m")
+                Triple(AlignmentState.MIXED, 55, "กำลังสะสมแรง — รอการยืนยันจาก 5m/15m")
         }
 
         return MultiTimeframeReport(

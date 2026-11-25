@@ -1,15 +1,24 @@
 package com.example.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
@@ -19,6 +28,9 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Analytics
 import androidx.compose.material.icons.rounded.CandlestickChart
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -36,13 +48,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
@@ -55,6 +70,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.FirebaseBootstrap
 import com.example.R
 import com.example.data.local.TradingDatabase
 import com.example.data.remote.BackendConnectorClient
@@ -74,9 +90,7 @@ import com.example.ui.screens.TerminalScreen
 import com.example.ui.theme.LocalTradingColors
 import com.example.viewmodel.CloudUiState
 import com.example.viewmodel.TradingViewModel
-import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -129,8 +143,22 @@ private val NAV_ITEMS = listOf(
 )
 
 @Composable
-fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
-    val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
+fun AppNavigation(auth: FirebaseAuth? = null) {
+    val context = LocalContext.current
+    var initAttempt by remember { mutableIntStateOf(0) }
+    val resolvedAuth = remember(auth, context, initAttempt) {
+        auth ?: FirebaseBootstrap.getAuthOrNull(context)
+    }
+
+    if (resolvedAuth == null) {
+        FirebaseConfigMissingScreen(
+            onRetry = { initAttempt++ }
+        )
+        return
+    }
+
+    val currentUser by resolvedAuth.authStateFlow()
+        .collectAsStateWithLifecycle(initialValue = resolvedAuth.currentUser)
     val user = currentUser
 
     if (user == null) {
@@ -142,6 +170,78 @@ fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
                 displayName = user.displayName ?: "Trader",
                 email = user.email
             )
+        }
+    }
+}
+
+@Composable
+private fun FirebaseConfigMissingScreen(onRetry: () -> Unit) {
+    val tradingColors = LocalTradingColors.current
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(tradingColors.surfaceCanvas)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(24.dp)
+            .testTag("firebase_config_missing_screen"),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            color = tradingColors.surfaceElevated,
+            shape = RoundedCornerShape(18.dp),
+            border = BorderStroke(1.dp, tradingColors.warning.copy(alpha = 0.5f)),
+            modifier = Modifier.widthIn(max = 520.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.WarningAmber,
+                        contentDescription = "Firebase configuration missing",
+                        tint = tradingColors.warning,
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Text(
+                        text = "ยังไม่ได้ตั้งค่า Firebase ในไฟล์ APK",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                Text(
+                    text = "ไม่พบข้อมูลทรัพยากรจาก app/google-services.json ในบิลด์นี้ (เช่น บิลด์ผ่าน GitHub Actions โดยยังไม่ได้เพิ่ม Secret ชื่อ GOOGLE_SERVICES_JSON) จึงไม่สามารถเริ่มต้น FirebaseApp ได้",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "วิธีแก้ไข:\n1) ไปที่ GitHub Repository → Settings → Secrets and variables → Actions\n2) เพิ่ม Secret ชื่อ GOOGLE_SERVICES_JSON โดยใส่เนื้อหาจากไฟล์ app/google-services.json\n3) สั่งรัน Workflow Build APK ใหม่อีกครั้ง แล้วติดตั้ง APK ล่าสุด",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Button(
+                    onClick = onRetry,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = tradingColors.bullish,
+                        contentColor = tradingColors.surfaceCanvas
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("retry_firebase_init_button")
+                ) {
+                    Text(
+                        text = "ลองตรวจสอบการตั้งค่าอีกครั้ง",
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
         }
     }
 }
@@ -196,6 +296,8 @@ private fun AuthenticatedTradingShell(
     val mlModels by viewModel.mlModels.collectAsStateWithLifecycle()
     val activeMlModel by viewModel.activeMlModel.collectAsStateWithLifecycle()
     val isMlBusy by viewModel.isMlBusy.collectAsStateWithLifecycle()
+    val backendOrders by viewModel.backendOrders.collectAsStateWithLifecycle()
+    val selectedOrderEvents by viewModel.selectedOrderEvents.collectAsStateWithLifecycle()
 
     LaunchedEffect(snackbarMessage) {
         val msg = snackbarMessage
@@ -338,7 +440,8 @@ private fun AuthenticatedTradingShell(
                                 onStartReplay = viewModel::startReplayMode,
                                 onStepReplay = viewModel::stepReplay,
                                 onResetReplay = viewModel::resetReplay,
-                                onExitReplay = viewModel::exitReplayMode
+                                onExitReplay = viewModel::exitReplayMode,
+                                onReconcileOrders = { viewModel.reconcileBackendOrders() }
                             )
                         }
                         composable(NavRoutes.STRATEGY) {
@@ -361,7 +464,13 @@ private fun AuthenticatedTradingShell(
                             PnLDashboardScreen(
                                 dailySummaries = dailySummaries,
                                 trades = trades,
-                                todayDateKey = todayDateKey
+                                todayDateKey = todayDateKey,
+                                backendOrders = backendOrders,
+                                selectedOrderEvents = selectedOrderEvents,
+                                isReconciling = terminalState.isReconciling,
+                                onReconcileOrders = viewModel::reconcileBackendOrders,
+                                onSelectBackendOrder = viewModel::loadOrderLifecycleEvents,
+                                onClearOrderEvents = viewModel::clearSelectedOrderEvents
                             )
                         }
                         composable(NavRoutes.SETTINGS_DOCS) {

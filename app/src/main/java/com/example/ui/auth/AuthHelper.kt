@@ -13,6 +13,7 @@ import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+import com.example.FirebaseBootstrap
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -57,7 +58,12 @@ fun attemptAutoSignIn(
     onUnauthenticated: () -> Unit,
     scope: CoroutineScope
 ) {
-    if (Firebase.auth.currentUser != null) {
+    val firebaseAuth = FirebaseBootstrap.getAuthOrNull(context)
+    if (firebaseAuth == null) {
+        onUnauthenticated()
+        return
+    }
+    if (firebaseAuth.currentUser != null) {
         onAuthSuccess()
         return
     }
@@ -79,7 +85,7 @@ fun attemptAutoSignIn(
             val cred = credentialManager.getCredential(context, request).credential
             if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
-                Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                firebaseAuth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
                 onAuthSuccess()
             } else {
                 onUnauthenticated()
@@ -98,6 +104,11 @@ fun onGoogleSignInClicked(
     scope: CoroutineScope,
     onAuthCancelled: () -> Unit = {}
 ) {
+    val firebaseAuth = FirebaseBootstrap.getAuthOrNull(context)
+    if (firebaseAuth == null) {
+        onAuthError("Firebase ยังไม่ได้ตั้งค่าในบิลด์นี้ (กรุณาเพิ่ม app/google-services.json หรือ GOOGLE_SERVICES_JSON Secret)")
+        return
+    }
     val clientId = resolveDefaultWebClientId(context)
     if (clientId == null) {
         onAuthError("ไม่พบการตั้งค่า Google Sign-In (กรุณาเพิ่ม google-services.json หรือ GOOGLE_SERVICES_JSON Secret)")
@@ -114,7 +125,7 @@ fun onGoogleSignInClicked(
             val cred = credentialManager.getCredential(activity, request).credential
             if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
-                Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                firebaseAuth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
                 onAuthSuccess()
             } else {
                 onAuthError("ประเภทข้อมูลยืนยันตัวตนไม่ถูกต้อง")
@@ -141,7 +152,11 @@ fun signOutUser(
             } catch (e: Exception) {
                 Log.w("Auth", "Failed to clear credential state: ${e.message}")
             } finally {
-                Firebase.auth.signOut()
+                try {
+                    Firebase.auth.signOut()
+                } catch (e: IllegalStateException) {
+                    Log.w("Auth", "FirebaseAuth unavailable during signOut: ${e.message}")
+                }
                 onSignOutComplete()
             }
         }

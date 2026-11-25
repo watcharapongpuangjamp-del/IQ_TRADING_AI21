@@ -1,11 +1,11 @@
-# IQ Trading AI — Python FastAPI Backend (Phase 1–3)
+# IQ Trading AI — Python FastAPI Backend (Phase 1–5)
 
 Modular quantitative trading intelligence backend built with FastAPI, Pydantic v2, SQLAlchemy, NumPy, Scikit-learn, and independent domain engines.
 
 ## Architecture
 
-- `app/domain.py`: Pure-Python domain models and enums (`ExecutionMode`, `TradeDirection`, `MarketRegime`, `AlignmentState`, `ModelStatus`, `StrategyConfig`, `DataQualityReport`, `MultiTimeframeReport`, `ReplayState`, `RiskPolicyConfig`).
-- `app/connectors/`: Broker abstraction (`BrokerConnector`) and deterministic-capable `SimulationConnector` (`live_authorized = False`).
+- `app/domain.py`: Pure-Python domain models and enums (`ExecutionMode`, `TradeDirection`, `OrderLifecycleState`, `MarketRegime`, `AlignmentState`, `ModelStatus`, `StrategyConfig`, `DataQualityReport`, `MultiTimeframeReport`, `ReplayState`, `RiskPolicyConfig`).
+- `app/connectors/`: Broker abstraction (`BrokerConnector` with `reconcile_order`) and deterministic-capable `SimulationConnector` (`live_authorized = False`).
 - `app/repositories/historical_candles.py`: SQLAlchemy historical OHLCV candle store with composite uniqueness `(instrument, timeframe, timestamp)` and chronological query slices.
 - `app/engines/`:
   - `market_intelligence.py` — OHLCV candle validation, gap/duplicate/outlier inspection, and timeframe resampling (`1m -> 5m / 15m`).
@@ -15,7 +15,7 @@ Modular quantitative trading intelligence backend built with FastAPI, Pydantic v
   - `replay_engine.py` — Deterministic chronological Simulator Replay cursor (`ts <= cursor_ts`) preventing look-ahead bias.
   - `strategy_engine.py` — Active strategy configuration manager.
   - `risk_engine.py` — Independent pre-trade Risk Guard (max per trade, daily loss, consecutive losses, daily trade count, portfolio exposure, loss cooldown, emergency stop, live lockout).
-  - `execution_engine.py` — 11-stage execution pipeline, `ExecutionModeController` (`SIMULATION` default), idempotency protection, and connection-failure lockout.
+  - `execution_engine.py` — 11-stage execution pipeline, 10-state `OrderLifecycleState` audit trail (`OrderLifecycleEventModel`), `ExecutionModeController` (`SIMULATION` default), `UNKNOWN` non-resubmission, and Reconcile-Before-Trade Risk Gate.
   - `learning_engine.py` — Performance summary metrics (`win_rate`, `profit_factor`, `max_drawdown`).
 - `app/ml/` (Phase 3 ML Pipeline):
   - `features.py` — Strictly causal feature extraction with execution-delay-aware target alignment.
@@ -26,13 +26,15 @@ Modular quantitative trading intelligence backend built with FastAPI, Pydantic v
   - `inference.py` — `ACTIVE` model signal inference keeping `confidence_score` distinct from `calibrated_probability` and falling back safely when no model is promoted.
 - `app/main.py`: FastAPI REST API (`/api/v1/*`) + WebSocket tick stream (`/ws/market/{instrument}`).
 
-## Phase 2 & 3 Endpoints
+## Phase 2–5 Endpoints
 
 - `GET /api/v1/candles/history` & `POST /api/v1/candles/history/ingest`
 - `GET /api/v1/market/intelligence` — Full `1m` + `5m` + `15m` multi-timeframe technical intelligence + ML/calibrated signal.
 - `POST /api/v1/replay/start`, `/step`, `/reset`, `GET /api/v1/replay/state`
 - `POST /api/v1/ml/train` — Train & validate Scikit-learn + Platt calibration model chronologically (never auto-promotes).
 - `GET /api/v1/ml/models`, `GET /api/v1/ml/active`, `POST /api/v1/ml/models/{model_id}/promote`
+- `GET /api/v1/orders/{order_id}/events` — 10-state order lifecycle & correlation audit timeline.
+- `POST /api/v1/trading/reconcile` & `POST /api/v1/orders/{order_id}/reconcile` — Broker reconciliation for `PENDING` / `UNKNOWN` orders.
 
 ## Local Setup (Python 3.12+)
 

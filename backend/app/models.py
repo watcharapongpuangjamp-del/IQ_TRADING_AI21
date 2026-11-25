@@ -39,6 +39,8 @@ class OrderRecordModel(Base):
 
     order_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     idempotency_key: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    broker_order_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     instrument: Mapped[str] = mapped_column(String(20), nullable=False)
     timeframe: Mapped[str] = mapped_column(String(10), nullable=False)
     direction: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -48,10 +50,27 @@ class OrderRecordModel(Base):
     entry_price: Mapped[float] = mapped_column(Float, nullable=False)
     exit_price: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
+    lifecycle_state: Mapped[str] = mapped_column(String(24), default="CREATED", index=True, nullable=False)
+    settlement_outcome: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_detail: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     pnl: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     date_key: Mapped[str] = mapped_column(String(10), index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class OrderLifecycleEventModel(Base):
+    __tablename__ = "order_lifecycle_events"
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    order_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    from_state: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    to_state: Mapped[str] = mapped_column(String(24), nullable=False)
+    detail: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
 class DailySummaryModel(Base):

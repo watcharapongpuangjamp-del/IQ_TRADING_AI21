@@ -27,11 +27,40 @@ enum class TradeDirection {
 }
 
 enum class TradeStatus {
-    OPEN, WON, LOST, REJECTED, CANCELLED;
+    OPEN, WON, LOST, REJECTED, CANCELLED, PENDING, FAILED, UNKNOWN;
 
     companion object {
         fun safeValueOf(raw: String?): TradeStatus =
             entries.firstOrNull { it.name == raw } ?: OPEN
+
+        fun toFirestoreStatus(raw: String?): String = when (safeValueOf(raw)) {
+            WON -> WON.name
+            LOST -> LOST.name
+            REJECTED -> REJECTED.name
+            CANCELLED, FAILED -> CANCELLED.name
+            OPEN, PENDING, UNKNOWN -> OPEN.name
+        }
+    }
+}
+
+enum class OrderLifecycleState(val labelTh: String) {
+    CREATED("สร้างคำสั่ง"),
+    VALIDATED("ผ่านการตรวจสอบ"),
+    AUTHORIZED("ยืนยันสิทธิ์แล้ว"),
+    SUBMITTED("ส่งเข้า Broker แล้ว"),
+    ACCEPTED("Broker รับคำสั่งแล้ว"),
+    PENDING("รอผลปิดออเดอร์"),
+    SETTLED("ปิดบัญชีแล้ว"),
+    REJECTED("ถูกปฏิเสธ"),
+    FAILED("ส่งคำสั่งล้มเหลว"),
+    UNKNOWN("ไม่ทราบสถานะ (ห้ามยิงซ้ำ)");
+
+    val isUnresolved: Boolean
+        get() = this == PENDING || this == UNKNOWN
+
+    companion object {
+        fun safeValueOf(raw: String?): OrderLifecycleState =
+            entries.firstOrNull { it.name == raw } ?: CREATED
     }
 }
 
@@ -328,12 +357,17 @@ data class SignalAnalysis(
 enum class AlignmentState(val labelTh: String) {
     ALIGNED_BULLISH("ทุกกรอบเวลาหนุนขาขึ้น"),
     ALIGNED_BEARISH("ทุกกรอบเวลาหนุนขาลง"),
-    CONFLICT("สัญญาณข้ามกรอบเวลาขัดแย้ง"),
-    NEUTRAL("กรอบเวลายังไม่ชัดเจน");
+    MIXED("กรอบเวลายังผสม / รอยืนยัน"),
+    CONFLICTING("สัญญาณข้ามกรอบเวลาขัดแย้ง");
 
     companion object {
-        fun safeValueOf(raw: String?): AlignmentState =
-            entries.firstOrNull { it.name == raw } ?: NEUTRAL
+        fun safeValueOf(raw: String?): AlignmentState = when (raw?.uppercase()) {
+            "ALIGNED_BULLISH" -> ALIGNED_BULLISH
+            "ALIGNED_BEARISH" -> ALIGNED_BEARISH
+            "CONFLICTING", "CONFLICT" -> CONFLICTING
+            "MIXED", "NEUTRAL" -> MIXED
+            else -> MIXED
+        }
     }
 }
 
@@ -407,6 +441,39 @@ data class MlModelSummary(
     val createdAt: String = "",
     val promotedAt: String? = null,
     val isActive: Boolean = false
+)
+
+data class BackendOrderSummary(
+    val orderId: String,
+    val correlationId: String,
+    val brokerOrderId: String? = null,
+    val status: String,
+    val lifecycleState: OrderLifecycleState,
+    val settlementOutcome: String? = null,
+    val entryPrice: Double = 0.0,
+    val exitPrice: Double = 0.0,
+    val pnl: Double = 0.0,
+    val requiresReconciliation: Boolean = false,
+    val message: String = ""
+)
+
+data class OrderLifecycleEvent(
+    val eventId: String,
+    val orderId: String,
+    val correlationId: String,
+    val fromState: String?,
+    val toState: String,
+    val detail: String,
+    val createdAt: String
+)
+
+data class ReconcileSummary(
+    val checkedCount: Int,
+    val settledCount: Int,
+    val pendingCount: Int,
+    val unknownCount: Int,
+    val failedCount: Int,
+    val message: String
 )
 
 data class RiskValidationResult(

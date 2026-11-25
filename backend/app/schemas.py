@@ -302,6 +302,32 @@ class OrderSubmitResponse(BaseModel):
     exit_price: float = 0.0
     pnl: float = 0.0
     message: Optional[str] = None
+    correlation_id: str = ""
+    broker_order_id: Optional[str] = None
+    lifecycle_state: str = "SETTLED"
+    settlement_outcome: Optional[str] = None
+    reconciled_at: Optional[datetime] = None
+    requires_reconciliation: bool = False
+
+
+class OrderLifecycleEventResponse(BaseModel):
+    event_id: str
+    order_id: str
+    correlation_id: str
+    from_state: Optional[str] = None
+    to_state: str
+    detail: str = ""
+    created_at: datetime
+
+
+class ReconcileSummaryResponse(BaseModel):
+    checked_count: int
+    settled_count: int
+    pending_count: int
+    unknown_count: int
+    failed_count: int
+    orders: List[OrderSubmitResponse]
+    message: str
 
 
 class ModeSwitchRequest(BaseModel):
@@ -322,6 +348,7 @@ class TradingStateResponse(BaseModel):
     consecutive_losses: int
     emergency_stopped: bool
     win_rate_pct: float
+    unresolved_orders_count: int = 0
 
 
 class TrainModelRequest(BaseModel):

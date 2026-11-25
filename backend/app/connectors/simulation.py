@@ -2,7 +2,7 @@ import math
 import random
 import time
 import uuid
-from typing import Dict, List
+from typing import Dict, List, Optional, Set
 
 from app.connectors.base import BrokerConnector, ConnectorOrderResult
 
@@ -22,12 +22,17 @@ TIMEFRAME_SECONDS: Dict[str, int] = {
 
 
 class SimulationConnector(BrokerConnector):
-    """Deterministic-capable Simulation Connector for Phase 1 safe testing."""
+    """Deterministic-capable Simulation Connector supporting full 10-state reconciliation."""
 
     def __init__(self, initial_balance: float = 10000.0) -> None:
         self._connected: bool = True
         self._balance: float = initial_balance
         self._orders: Dict[str, ConnectorOrderResult] = {}
+        self._orders_by_correlation: Dict[str, ConnectorOrderResult] = {}
+        self._deferred_settlements: Dict[str, ConnectorOrderResult] = {}
+        self._settled_order_ids: Set[str] = set()
+        self._queued_behaviors: List[str] = []
+        self._persistent_reconcile_unknown: bool = False
         self._candle_cache: Dict[str, List[Dict[str, float]]] = {}
 
     @property
@@ -50,7 +55,19 @@ class SimulationConnector(BrokerConnector):
             "CANDLES",
             "PAPER_ORDERS",
             "RISK_VALIDATION",
+            "RECONCILIATION",
         ]
+
+    def queue_simulation_behavior(self, behavior: str, persistent_unknown: bool = False) -> None:
+        """
+        Queue next submit_order behavior for deterministic reconciliation testing:
+        SETTLED | PENDING | TIMEOUT | REJECTED | FAILED
+        """
+        self._queued_behaviors.append(behavior.upper())
+        self._persistent_reconcile_unknown = persistent_unknown
+
+    def set_persistent_unknown(self, enabled: bool) -> None:
+        self._persistent_reconcile_unknown = enabled
 
     async def connect(self) -> bool:
         self._connected = True
@@ -79,6 +96,11 @@ class SimulationConnector(BrokerConnector):
             self._append_or_update_tick(cache_key, instrument, timeframe)
         return list(self._candle_cache[cache_key][-limit:])
 
+    def _apply_settlement_to_balance(self, order_id: str, pnl: float) -> None:
+        if order_id not in self._settled_order_ids:
+            self._settled_order_ids.add(order_id)
+            self._balance = max(0.0, round(self._balance + pnl, 2))
+
     async def submit_order(
         self,
         instrument: str,
@@ -86,34 +108,104 @@ class SimulationConnector(BrokerConnector):
         direction: str,
         amount: float,
         expiry_seconds: int,
+        correlation_id: Optional[str] = None,
     ) -> ConnectorOrderResult:
         if not self._connected:
             raise ConnectionError("Simulation connector is disconnected.")
+
+        corr_id = correlation_id or f"corr_{uuid.uuid4().hex[:12]}"
+        if corr_id in self._orders_by_correlation:
+            return self._orders_by_correlation[corr_id]
+
         candles = await self.get_candles(instrument, timeframe, limit=5)
         entry_price = candles[-1]["close"]
         spec = INSTRUMENT_SPECS.get(instrument, INSTRUMENT_SPECS["EUR/USD"])
+        order_id = f"sim_{uuid.uuid4().hex[:12]}"
 
-        # Simulate realistic micro-move at settlement
+        behavior = self._queued_behaviors.pop(0) if self._queued_behaviors else "SETTLED"
+
+        if behavior == "REJECTED":
+            rejected = ConnectorOrderResult(
+                order_id=order_id,
+                broker_order_id=order_id,
+                correlation_id=corr_id,
+                status="REJECTED",
+                lifecycle_state="REJECTED",
+                settlement_outcome=None,
+                entry_price=entry_price,
+                exit_price=entry_price,
+                pnl=0.0,
+                message=f"Simulated broker rejected {direction} order",
+            )
+            self._orders[order_id] = rejected
+            self._orders_by_correlation[corr_id] = rejected
+            return rejected
+
+        if behavior == "FAILED":
+            failed = ConnectorOrderResult(
+                order_id=order_id,
+                broker_order_id=order_id,
+                correlation_id=corr_id,
+                status="FAILED",
+                lifecycle_state="FAILED",
+                settlement_outcome=None,
+                entry_price=entry_price,
+                exit_price=0.0,
+                pnl=0.0,
+                message=f"Simulated broker execution failure for {direction}",
+            )
+            self._orders[order_id] = failed
+            self._orders_by_correlation[corr_id] = failed
+            return failed
+
         rng = random.Random()
         drift = (rng.random() - 0.48) * spec["vol"] * 1.4
         exit_price = max(entry_price + drift, spec["base"] * 0.5)
+        if abs(exit_price - entry_price) < 1e-8:
+            exit_price = entry_price + spec["vol"] * 0.25
 
         won = (exit_price > entry_price) if direction == "CALL" else (exit_price < entry_price)
         pnl = round(amount * spec["payout"], 2) if won else round(-amount, 2)
-        status = "WON" if won else "LOST"
-        self._balance = max(0.0, round(self._balance + pnl, 2))
+        outcome = "WON" if won else "LOST"
 
-        order_id = f"sim_{uuid.uuid4().hex[:12]}"
-        result = ConnectorOrderResult(
+        settled_result = ConnectorOrderResult(
             order_id=order_id,
-            status=status,
+            broker_order_id=order_id,
+            correlation_id=corr_id,
+            status=outcome,
+            lifecycle_state="SETTLED",
+            settlement_outcome=outcome,
             entry_price=entry_price,
             exit_price=exit_price,
             pnl=pnl,
-            message=f"Simulated {direction} settled as {status}",
+            message=f"Simulated {direction} settled as {outcome}",
         )
-        self._orders[order_id] = result
-        return result
+
+        if behavior in ("PENDING", "TIMEOUT"):
+            self._deferred_settlements[order_id] = settled_result
+            self._deferred_settlements[corr_id] = settled_result
+            pending_result = ConnectorOrderResult(
+                order_id=order_id,
+                broker_order_id=order_id,
+                correlation_id=corr_id,
+                status="PENDING",
+                lifecycle_state="PENDING",
+                settlement_outcome=None,
+                entry_price=entry_price,
+                exit_price=0.0,
+                pnl=0.0,
+                message=f"Simulated {direction} awaiting settlement",
+            )
+            self._orders[order_id] = pending_result
+            self._orders_by_correlation[corr_id] = pending_result
+            if behavior == "TIMEOUT":
+                raise TimeoutError(f"Simulated broker timeout while acknowledging order {corr_id}")
+            return pending_result
+
+        self._apply_settlement_to_balance(order_id, pnl)
+        self._orders[order_id] = settled_result
+        self._orders_by_correlation[corr_id] = settled_result
+        return settled_result
 
     async def get_order_status(self, order_id: str) -> ConnectorOrderResult:
         if order_id not in self._orders:
@@ -122,6 +214,36 @@ class SimulationConnector(BrokerConnector):
 
     async def get_settlement_result(self, order_id: str) -> ConnectorOrderResult:
         return await self.get_order_status(order_id)
+
+    async def reconcile_order(
+        self,
+        order_id: str,
+        correlation_id: Optional[str] = None,
+    ) -> ConnectorOrderResult:
+        if not self._connected:
+            raise ConnectionError("Simulation connector is disconnected.")
+        if self._persistent_reconcile_unknown:
+            raise TimeoutError("Simulated persistent broker timeout during reconciliation.")
+
+        deferred = self._deferred_settlements.pop(order_id, None)
+        if deferred is None and correlation_id:
+            deferred = self._deferred_settlements.pop(correlation_id, None)
+        if deferred is not None:
+            self._deferred_settlements.pop(deferred.order_id, None)
+            if deferred.correlation_id:
+                self._deferred_settlements.pop(deferred.correlation_id, None)
+            self._apply_settlement_to_balance(deferred.order_id, deferred.pnl)
+            self._orders[deferred.order_id] = deferred
+            if deferred.correlation_id:
+                self._orders_by_correlation[deferred.correlation_id] = deferred
+            return deferred
+
+        if order_id in self._orders:
+            return self._orders[order_id]
+        if correlation_id and correlation_id in self._orders_by_correlation:
+            return self._orders_by_correlation[correlation_id]
+
+        raise KeyError(f"Order {order_id} (correlation={correlation_id}) not found for reconciliation")
 
     def _generate_initial_candles(self, instrument: str, timeframe: str, count: int) -> List[Dict[str, float]]:
         spec = INSTRUMENT_SPECS.get(instrument, INSTRUMENT_SPECS["EUR/USD"])

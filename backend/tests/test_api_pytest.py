@@ -297,3 +297,155 @@ def test_websocket_market_stream(client: TestClient) -> None:
         assert msg["type"] == "tick"
         assert msg["instrument"] == "EUR/USD"
         assert "close" in msg["candle"]
+
+
+def test_order_lifecycle_10_states_audit_events(client: TestClient) -> None:
+    res = client.post(
+        "/api/v1/orders",
+        json={
+            "instrument": "EUR/USD",
+            "timeframe": "1m",
+            "direction": "CALL",
+            "amount": 25.0,
+            "expiry_seconds": 60,
+            "mode": "SIMULATION",
+            "idempotency_key": "idem-lifecycle-events-001",
+        },
+    )
+    assert res.status_code == 200
+    order = res.json()
+    assert order["lifecycle_state"] == "SETTLED"
+    assert order["correlation_id"].startswith("corr_")
+    assert order["requires_reconciliation"] is False
+
+    events_res = client.get(f"/api/v1/orders/{order['order_id']}/events")
+    assert events_res.status_code == 200
+    states = [e["to_state"] for e in events_res.json()]
+    assert states == ["CREATED", "VALIDATED", "AUTHORIZED", "SUBMITTED", "ACCEPTED", "SETTLED"]
+
+
+def test_unknown_timeout_never_resubmits_and_blocks_new_orders_until_reconciled(client: TestClient) -> None:
+    connector = client.app.state.connector
+    connector.queue_simulation_behavior("TIMEOUT", persistent_unknown=True)
+
+    payload = {
+        "instrument": "EUR/USD",
+        "timeframe": "1m",
+        "direction": "PUT",
+        "amount": 20.0,
+        "expiry_seconds": 60,
+        "mode": "SIMULATION",
+        "idempotency_key": "idem-timeout-unknown-001",
+    }
+    first = client.post("/api/v1/orders", json=payload)
+    assert first.status_code == 200
+    first_data = first.json()
+    assert first_data["lifecycle_state"] == "UNKNOWN"
+    assert first_data["status"] == "UNKNOWN"
+    assert first_data["requires_reconciliation"] is True
+
+    # Retrying with the exact same idempotency_key MUST NOT resubmit to broker
+    dup = client.post("/api/v1/orders", json=payload)
+    assert dup.status_code == 200
+    assert dup.json()["order_id"] == first_data["order_id"]
+    assert dup.json()["lifecycle_state"] == "UNKNOWN"
+    assert "blocked" in (dup.json()["message"] or "").lower()
+
+    # Opening a new trade while UNKNOWN order cannot reconcile MUST fail closed (400)
+    blocked = client.post(
+        "/api/v1/orders",
+        json={
+            "instrument": "EUR/USD",
+            "timeframe": "1m",
+            "direction": "CALL",
+            "amount": 15.0,
+            "expiry_seconds": 60,
+            "mode": "SIMULATION",
+            "idempotency_key": "idem-blocked-while-unknown-002",
+        },
+    )
+    assert blocked.status_code == 400
+    assert "UNKNOWN" in blocked.json()["detail"]
+
+    # Recover broker connectivity and reconcile
+    connector.set_persistent_unknown(False)
+    rec = client.post("/api/v1/trading/reconcile")
+    assert rec.status_code == 200
+    rec_data = rec.json()
+    assert rec_data["settled_count"] == 1
+    assert rec_data["unknown_count"] == 0
+
+    events_res = client.get(f"/api/v1/orders/{first_data['order_id']}/events")
+    assert "UNKNOWN" in [e["to_state"] for e in events_res.json()]
+    assert [e["to_state"] for e in events_res.json()][-1] == "SETTLED"
+
+    # Subsequent trade now succeeds cleanly
+    next_order = client.post(
+        "/api/v1/orders",
+        json={
+            "instrument": "EUR/USD",
+            "timeframe": "1m",
+            "direction": "CALL",
+            "amount": 15.0,
+            "expiry_seconds": 60,
+            "mode": "SIMULATION",
+            "idempotency_key": "idem-after-reconcile-003",
+        },
+    )
+    assert next_order.status_code == 200
+    assert next_order.json()["lifecycle_state"] == "SETTLED"
+
+
+def test_pending_order_auto_reconciles_before_new_trade_without_double_counting(client: TestClient) -> None:
+    connector = client.app.state.connector
+    connector.queue_simulation_behavior("PENDING")
+
+    pending_res = client.post(
+        "/api/v1/orders",
+        json={
+            "instrument": "EUR/USD",
+            "timeframe": "1m",
+            "direction": "CALL",
+            "amount": 25.0,
+            "expiry_seconds": 60,
+            "mode": "SIMULATION",
+            "idempotency_key": "idem-pending-first-001",
+        },
+    )
+    assert pending_res.status_code == 200
+    pending_order = pending_res.json()
+    assert pending_order["lifecycle_state"] == "PENDING"
+    assert pending_order["requires_reconciliation"] is True
+
+    state_before = client.get("/api/v1/state").json()
+    assert state_before["unresolved_orders_count"] == 1
+    assert state_before["total_trades_today"] == 0
+
+    # Submitting a new order auto-reconciles the PENDING order first, then opens the new order
+    second_res = client.post(
+        "/api/v1/orders",
+        json={
+            "instrument": "EUR/USD",
+            "timeframe": "1m",
+            "direction": "PUT",
+            "amount": 25.0,
+            "expiry_seconds": 60,
+            "mode": "SIMULATION",
+            "idempotency_key": "idem-second-after-pending-002",
+        },
+    )
+    assert second_res.status_code == 200
+    assert second_res.json()["lifecycle_state"] == "SETTLED"
+
+    reconciled_first = client.get(f"/api/v1/orders/{pending_order['order_id']}").json()
+    assert reconciled_first["lifecycle_state"] == "SETTLED"
+    assert reconciled_first["settlement_outcome"] in ("WON", "LOST")
+
+    state_after = client.get("/api/v1/state").json()
+    assert state_after["unresolved_orders_count"] == 0
+    assert state_after["total_trades_today"] == 2
+
+    # Extra reconcile pass must be a no-op with zero double counting
+    noop = client.post("/api/v1/trading/reconcile").json()
+    assert noop["checked_count"] == 0
+    assert client.get("/api/v1/state").json()["total_trades_today"] == 2

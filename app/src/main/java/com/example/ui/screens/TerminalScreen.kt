@@ -78,6 +78,7 @@ fun TerminalScreen(
     onStepReplay: (Int) -> Unit,
     onResetReplay: () -> Unit,
     onExitReplay: () -> Unit,
+    onReconcileOrders: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
@@ -163,6 +164,61 @@ fun TerminalScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("KILL STOP", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1b. Unresolved Order Reconciliation Guard Banner
+        if (terminalState.unresolvedOrdersCount > 0) {
+            item {
+                Surface(
+                    color = tradingColors.warningContainer,
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, tradingColors.warning.copy(alpha = 0.7f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "พบออเดอร์ค้าง ${terminalState.unresolvedOrdersCount} รายการ (PENDING / UNKNOWN)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = tradingColors.warning
+                            )
+                            Text(
+                                text = "Risk Gate จะปิดออเดอร์ย้อนหลังผ่าน Reconciliation ก่อนเปิดไม้ใหม่ (ห้ามยิงซ้ำเมื่อ UNKNOWN)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Button(
+                            onClick = onReconcileOrders,
+                            enabled = !terminalState.isReconciling,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = tradingColors.warning,
+                                contentColor = tradingColors.surfaceCanvas
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .height(48.dp)
+                                .testTag("reconcile_orders_button")
+                        ) {
+                            Text(
+                                text = if (terminalState.isReconciling) "กำลังตรวจ..." else "Reconcile",
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }
@@ -476,6 +532,13 @@ fun TerminalScreen(
                                     .height(5.dp)
                                     .clip(RoundedCornerShape(4.dp))
                             )
+                            if (!terminalState.lastOrderCorrelationId.isNullOrBlank()) {
+                                Text(
+                                    text = "Correlation: ${terminalState.lastOrderCorrelationId} • Lifecycle: ${terminalState.lastOrderLifecycleState?.name ?: "SETTLED"}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
 

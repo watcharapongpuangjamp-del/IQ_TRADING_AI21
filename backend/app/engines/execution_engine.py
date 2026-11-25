@@ -1,26 +1,37 @@
 from datetime import datetime, timezone
 import time
 from typing import Dict, List, Optional, Tuple
+import uuid
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.connectors.base import BrokerConnector
+from app.connectors.base import BrokerConnector, ConnectorOrderResult
 from app.connectors.simulation import INSTRUMENT_SPECS
 from app.engines.market_intelligence import MarketIntelligenceEngine
 from app.engines.risk_engine import RiskManagementEngine
 from app.engines.technical_analysis import TechnicalAnalysisEngine
 from app.domain import (
     ExecutionMode,
+    OrderLifecycleState,
     RiskPolicyConfig,
     StrategyConfig,
     TradeDirection,
     TradeStatus,
+    UNRESOLVED_LIFECYCLE_STATES,
 )
-from app.models import DailySummaryModel, OrderRecordModel, RiskPolicyModel, TradingStateModel
+from app.models import (
+    DailySummaryModel,
+    OrderLifecycleEventModel,
+    OrderRecordModel,
+    RiskPolicyModel,
+    TradingStateModel,
+)
 from app.schemas import (
+    OrderLifecycleEventResponse,
     OrderSubmitRequest,
     OrderSubmitResponse,
+    ReconcileSummaryResponse,
     RiskPolicySchema,
 )
 
@@ -30,11 +41,11 @@ class ExecutionAuthorizationError(PermissionError):
 
 
 class ExecutionValidationError(ValueError):
-    """Raised when market data, strategy, or risk validation blocks an order."""
+    """Raised when market data, strategy, reconciliation, or risk validation blocks an order."""
 
 
 class ExecutionConnectorError(RuntimeError):
-    """Raised when the underlying broker connector fails during execution."""
+    """Raised when the underlying broker connector fails before submission."""
 
 
 class ExecutionModeController:
@@ -71,10 +82,9 @@ class ExecutionModeController:
 
 class TradeExecutionEngine:
     """
-    Implements the 11-stage automated trading lifecycle:
-    MARKET DATA -> DATA VALIDATION -> MARKET ANALYSIS -> AI SIGNAL ->
-    STRATEGY VALIDATION -> RISK VALIDATION -> EXECUTION AUTHORIZATION ->
-    ORDER SUBMISSION -> RESULT VERIFICATION -> TRADE LOGGING -> PERFORMANCE EVALUATION.
+    Implements the 11-stage automated trading pipeline and 10-state Order Lifecycle:
+    CREATED -> VALIDATED -> AUTHORIZED -> SUBMITTED -> ACCEPTED -> PENDING -> SETTLED
+    (plus REJECTED / FAILED / UNKNOWN with strict reconciliation and no blind resubmits).
     """
 
     def __init__(
@@ -133,6 +143,232 @@ class TradeExecutionEngine:
             auto_trade_enabled=model.auto_trade_enabled,
         )
 
+    @staticmethod
+    def to_order_response(
+        record: OrderRecordModel,
+        message_override: Optional[str] = None,
+    ) -> OrderSubmitResponse:
+        unresolved = record.lifecycle_state in UNRESOLVED_LIFECYCLE_STATES
+        default_msg = record.error_detail or f"{record.instrument} {record.direction} ({record.mode})"
+        return OrderSubmitResponse(
+            order_id=record.order_id,
+            status=record.status,
+            entry_price=record.entry_price,
+            exit_price=record.exit_price,
+            pnl=record.pnl,
+            message=message_override or default_msg,
+            correlation_id=record.correlation_id,
+            broker_order_id=record.broker_order_id,
+            lifecycle_state=record.lifecycle_state,
+            settlement_outcome=record.settlement_outcome,
+            reconciled_at=record.reconciled_at,
+            requires_reconciliation=unresolved,
+        )
+
+    @staticmethod
+    def _record_transition(
+        db: Session,
+        record: OrderRecordModel,
+        to_state: OrderLifecycleState,
+        detail: str,
+        initial: bool = False,
+    ) -> None:
+        from_state = None if initial else record.lifecycle_state
+        record.lifecycle_state = to_state.value
+        db.add(
+            OrderLifecycleEventModel(
+                event_id=f"evt_{uuid.uuid4().hex[:14]}",
+                order_id=record.order_id,
+                correlation_id=record.correlation_id,
+                from_state=from_state,
+                to_state=to_state.value,
+                detail=detail[:500],
+            )
+        )
+
+    @staticmethod
+    def list_order_events(db: Session, order_id: str) -> List[OrderLifecycleEventResponse]:
+        rows = (
+            db.query(OrderLifecycleEventModel)
+            .filter(OrderLifecycleEventModel.order_id == order_id)
+            .order_by(OrderLifecycleEventModel.created_at.asc())
+            .all()
+        )
+        return [
+            OrderLifecycleEventResponse(
+                event_id=r.event_id,
+                order_id=r.order_id,
+                correlation_id=r.correlation_id,
+                from_state=r.from_state,
+                to_state=r.to_state,
+                detail=r.detail,
+                created_at=r.created_at,
+            )
+            for r in rows
+        ]
+
+    @staticmethod
+    def count_unresolved_orders(db: Session) -> int:
+        return int(
+            db.query(func.count(OrderRecordModel.order_id))
+            .filter(OrderRecordModel.lifecycle_state.in_(UNRESOLVED_LIFECYCLE_STATES))
+            .scalar()
+            or 0
+        )
+
+    async def _finalize_settlement_ledger(
+        self,
+        db: Session,
+        record: OrderRecordModel,
+        res: ConnectorOrderResult,
+        state: TradingStateModel,
+        summary: DailySummaryModel,
+    ) -> None:
+        already_settled = (
+            record.reconciled_at is not None
+            or record.status in (TradeStatus.WON.value, TradeStatus.LOST.value)
+        )
+        outcome = res.settlement_outcome or res.status
+        record.broker_order_id = res.broker_order_id or res.order_id
+        record.entry_price = res.entry_price or record.entry_price
+        record.exit_price = res.exit_price
+        record.pnl = res.pnl
+        record.status = outcome
+        record.settlement_outcome = outcome
+        record.error_detail = res.message[:500] if res.message else record.error_detail
+        record.reconciled_at = datetime.now(timezone.utc)
+
+        if not already_settled and outcome in (TradeStatus.WON.value, TradeStatus.LOST.value):
+            summary.total_trades += 1
+            summary.net_pnl = round(summary.net_pnl + res.pnl, 2)
+            if outcome == TradeStatus.WON.value:
+                summary.wins += 1
+                summary.consecutive_losses = 0
+            else:
+                summary.losses += 1
+                summary.consecutive_losses += 1
+                state.last_loss_epoch_ms = int(time.time() * 1000)
+
+            if summary.net_pnl < 0:
+                summary.peak_drawdown = max(summary.peak_drawdown, round(abs(summary.net_pnl), 2))
+
+        state.simulation_balance = await self._connector.get_balance()
+
+    async def reconcile_unresolved_orders(
+        self,
+        db: Session,
+        target_order_id: Optional[str] = None,
+    ) -> ReconcileSummaryResponse:
+        query = db.query(OrderRecordModel)
+        if target_order_id is not None:
+            query = query.filter(OrderRecordModel.order_id == target_order_id)
+        else:
+            query = query.filter(OrderRecordModel.lifecycle_state.in_(UNRESOLVED_LIFECYCLE_STATES))
+
+        targets = query.order_by(OrderRecordModel.created_at.asc()).all()
+        if not targets:
+            return ReconcileSummaryResponse(
+                checked_count=0,
+                settled_count=0,
+                pending_count=0,
+                unknown_count=0,
+                failed_count=0,
+                orders=[],
+                message="No PENDING or UNKNOWN orders require reconciliation.",
+            )
+
+        state = self.get_or_create_state(db)
+        settled_count = 0
+        pending_count = 0
+        unknown_count = 0
+        failed_count = 0
+
+        for record in targets:
+            if record.lifecycle_state == OrderLifecycleState.SETTLED.value:
+                settled_count += 1
+                continue
+
+            lookup_id = record.broker_order_id or record.order_id
+            try:
+                res = await self._connector.reconcile_order(lookup_id, correlation_id=record.correlation_id)
+            except KeyError as exc:
+                record.retry_count += 1
+                record.error_detail = f"Not found at broker during reconciliation: {exc}"[:500]
+                record.status = TradeStatus.FAILED.value
+                record.reconciled_at = datetime.now(timezone.utc)
+                self._record_transition(
+                    db,
+                    record,
+                    OrderLifecycleState.FAILED,
+                    f"Reconciliation confirmed order absent on broker: {exc}",
+                )
+                failed_count += 1
+                continue
+            except Exception as exc:
+                record.retry_count += 1
+                record.error_detail = f"Reconciliation error: {exc}"[:500]
+                record.status = TradeStatus.UNKNOWN.value
+                self._record_transition(
+                    db,
+                    record,
+                    OrderLifecycleState.UNKNOWN,
+                    f"Reconciliation failed/timed out (attempt {record.retry_count}): {exc}",
+                )
+                unknown_count += 1
+                continue
+
+            if res.lifecycle_state == OrderLifecycleState.SETTLED.value or res.status in (
+                TradeStatus.WON.value,
+                TradeStatus.LOST.value,
+            ):
+                summary = self.get_or_create_daily_summary(db, record.date_key)
+                await self._finalize_settlement_ledger(db, record, res, state, summary)
+                self._record_transition(
+                    db,
+                    record,
+                    OrderLifecycleState.SETTLED,
+                    f"Reconciled settlement: {record.settlement_outcome} (PnL={record.pnl:.2f})",
+                )
+                settled_count += 1
+            elif res.lifecycle_state == OrderLifecycleState.REJECTED.value or res.status == TradeStatus.REJECTED.value:
+                record.status = TradeStatus.REJECTED.value
+                record.error_detail = res.message[:500]
+                record.reconciled_at = datetime.now(timezone.utc)
+                self._record_transition(db, record, OrderLifecycleState.REJECTED, res.message or "Reconciled REJECTED")
+                failed_count += 1
+            elif res.lifecycle_state == OrderLifecycleState.FAILED.value or res.status == TradeStatus.FAILED.value:
+                record.status = TradeStatus.FAILED.value
+                record.error_detail = res.message[:500]
+                record.reconciled_at = datetime.now(timezone.utc)
+                self._record_transition(db, record, OrderLifecycleState.FAILED, res.message or "Reconciled FAILED")
+                failed_count += 1
+            elif res.lifecycle_state == OrderLifecycleState.PENDING.value or res.status == TradeStatus.PENDING.value:
+                record.broker_order_id = res.broker_order_id or res.order_id
+                record.status = TradeStatus.PENDING.value
+                self._record_transition(db, record, OrderLifecycleState.PENDING, "Order still PENDING at broker")
+                pending_count += 1
+            else:
+                record.status = TradeStatus.UNKNOWN.value
+                self._record_transition(db, record, OrderLifecycleState.UNKNOWN, f"Ambiguous broker state: {res.status}")
+                unknown_count += 1
+
+        db.commit()
+        for r in targets:
+            db.refresh(r)
+
+        return ReconcileSummaryResponse(
+            checked_count=len(targets),
+            settled_count=settled_count,
+            pending_count=pending_count,
+            unknown_count=unknown_count,
+            failed_count=failed_count,
+            orders=[self.to_order_response(r) for r in targets],
+            message=(
+                f"Reconciled {len(targets)} order(s): "
+                f"{settled_count} settled, {pending_count} pending, {unknown_count} unknown, {failed_count} failed."
+            ),
+        )
+
     async def execute_order(
         self,
         db: Session,
@@ -140,20 +376,21 @@ class TradeExecutionEngine:
         strategy: StrategyConfig,
         explicit_live_confirmation: bool = False,
     ) -> OrderSubmitResponse:
-        # Duplicate order protection via idempotency_key
+        # 1. Duplicate order protection via idempotency_key (NEVER resubmit when UNKNOWN)
         existing = (
             db.query(OrderRecordModel)
             .filter(OrderRecordModel.idempotency_key == request.idempotency_key)
             .first()
         )
         if existing is not None:
-            return OrderSubmitResponse(
-                order_id=existing.order_id,
-                status=existing.status,
-                entry_price=existing.entry_price,
-                exit_price=existing.exit_price,
-                pnl=existing.pnl,
-                message="Idempotent replay of existing order.",
+            if existing.lifecycle_state == OrderLifecycleState.UNKNOWN.value:
+                return self.to_order_response(
+                    existing,
+                    message_override="Order is in UNKNOWN state — automatic resubmission blocked. Run reconciliation.",
+                )
+            return self.to_order_response(
+                existing,
+                message_override="Idempotent replay of existing order.",
             )
 
         state = self.get_or_create_state(db)
@@ -161,6 +398,18 @@ class TradeExecutionEngine:
         policy = self.policy_to_schema(policy_model)
         date_key = self.today_key()
         summary = self.get_or_create_daily_summary(db, date_key)
+
+        # 2. Reconcile-Before-Trade Gate: settle any prior PENDING/UNKNOWN orders before opening a new trade
+        if self.count_unresolved_orders(db) > 0:
+            reconcile_summary = await self.reconcile_unresolved_orders(db)
+            if reconcile_summary.unknown_count > 0:
+                raise ExecutionValidationError(
+                    "Risk Gate blocked: unresolved UNKNOWN order(s) failed reconciliation; new trades disabled (fail-closed)."
+                )
+            if reconcile_summary.pending_count > 0:
+                raise ExecutionValidationError(
+                    "Risk Gate blocked: existing PENDING order(s) must settle via reconciliation before opening a new trade."
+                )
 
         # Stage 7 pre-check: Execution mode authorization
         authorized, auth_reason = ExecutionModeController.authorize_mode(
@@ -207,7 +456,20 @@ class TradeExecutionEngine:
         # Stage 6: Independent Risk Validation (never overridden by AI)
         open_exposure = float(
             db.query(func.coalesce(func.sum(OrderRecordModel.amount), 0.0))
-            .filter(OrderRecordModel.date_key == date_key, OrderRecordModel.status == TradeStatus.OPEN.value)
+            .filter(
+                OrderRecordModel.date_key == date_key,
+                OrderRecordModel.lifecycle_state.in_(
+                    (
+                        OrderLifecycleState.CREATED.value,
+                        OrderLifecycleState.VALIDATED.value,
+                        OrderLifecycleState.AUTHORIZED.value,
+                        OrderLifecycleState.SUBMITTED.value,
+                        OrderLifecycleState.ACCEPTED.value,
+                        OrderLifecycleState.PENDING.value,
+                        OrderLifecycleState.UNKNOWN.value,
+                    )
+                ),
+            )
             .scalar()
             or 0.0
         )
@@ -227,7 +489,58 @@ class TradeExecutionEngine:
         if not risk_decision.allowed:
             raise ExecutionValidationError(risk_decision.reason)
 
-        # Stage 8 & 9: Order Submission & Result Verification
+        # Persist order intent BEFORE calling broker so mid-flight crashes/timeouts are traceable
+        payout_rate = INSTRUMENT_SPECS.get(request.instrument, INSTRUMENT_SPECS["EUR/USD"])["payout"]
+        order_id = f"ord_{uuid.uuid4().hex[:12]}"
+        correlation_id = f"corr_{uuid.uuid4().hex[:12]}"
+        entry_estimate = float(candles[-1]["close"])
+
+        record = OrderRecordModel(
+            order_id=order_id,
+            idempotency_key=request.idempotency_key,
+            correlation_id=correlation_id,
+            broker_order_id=None,
+            instrument=request.instrument,
+            timeframe=request.timeframe,
+            direction=request.direction.value,
+            mode=request.mode.value,
+            amount=request.amount,
+            payout_rate=payout_rate,
+            entry_price=entry_estimate,
+            exit_price=0.0,
+            status=TradeStatus.OPEN.value,
+            lifecycle_state=OrderLifecycleState.CREATED.value,
+            date_key=date_key,
+        )
+        db.add(record)
+        self._record_transition(
+            db,
+            record,
+            OrderLifecycleState.CREATED,
+            f"Order created ({request.instrument} {request.direction.value} ${request.amount:.2f})",
+            initial=True,
+        )
+        self._record_transition(
+            db,
+            record,
+            OrderLifecycleState.VALIDATED,
+            f"Data & Risk Gate passed ({risk_decision.reason})",
+        )
+        self._record_transition(
+            db,
+            record,
+            OrderLifecycleState.AUTHORIZED,
+            auth_reason,
+        )
+        self._record_transition(
+            db,
+            record,
+            OrderLifecycleState.SUBMITTED,
+            f"Dispatching to connector '{self._connector.name}'",
+        )
+        db.commit()
+
+        # Stage 8: Broker Submission (any timeout/connection uncertainty -> UNKNOWN, never blind resubmit)
         try:
             connector_res = await self._connector.submit_order(
                 instrument=request.instrument,
@@ -235,55 +548,93 @@ class TradeExecutionEngine:
                 direction=request.direction.value,
                 amount=request.amount,
                 expiry_seconds=request.expiry_seconds,
+                correlation_id=correlation_id,
             )
-            verified_res = await self._connector.get_settlement_result(connector_res.order_id)
-        except ConnectionError as exc:
-            state.execution_mode = ExecutionMode.SIMULATION.value
+        except (TimeoutError, ConnectionError) as exc:
+            record.status = TradeStatus.UNKNOWN.value
+            record.error_detail = f"Ambiguous broker transport failure after submission: {exc}"[:500]
+            self._record_transition(
+                db,
+                record,
+                OrderLifecycleState.UNKNOWN,
+                record.error_detail,
+            )
             db.commit()
-            raise ExecutionConnectorError(f"Broker connection failure during submission: {exc}") from exc
+            db.refresh(record)
+            return self.to_order_response(
+                record,
+                message_override=f"Order status UNKNOWN after transport timeout — reconciliation required ({correlation_id}).",
+            )
         except Exception as exc:
-            raise ExecutionConnectorError(f"Order verification failed: {exc}") from exc
+            record.status = TradeStatus.FAILED.value
+            record.error_detail = f"Broker submission exception: {exc}"[:500]
+            self._record_transition(db, record, OrderLifecycleState.FAILED, record.error_detail)
+            db.commit()
+            raise ExecutionConnectorError(f"Order submission failed: {exc}") from exc
 
-        # Stage 10: Trade Logging & Daily Risk Ledger Update
-        payout_rate = INSTRUMENT_SPECS.get(request.instrument, INSTRUMENT_SPECS["EUR/USD"])["payout"]
-        record = OrderRecordModel(
-            order_id=verified_res.order_id,
-            idempotency_key=request.idempotency_key,
-            instrument=request.instrument,
-            timeframe=request.timeframe,
-            direction=request.direction.value,
-            mode=request.mode.value,
-            amount=request.amount,
-            payout_rate=payout_rate,
-            entry_price=verified_res.entry_price,
-            exit_price=verified_res.exit_price,
-            status=verified_res.status,
-            pnl=verified_res.pnl,
-            date_key=date_key,
+        record.broker_order_id = connector_res.broker_order_id or connector_res.order_id
+        record.entry_price = connector_res.entry_price or entry_estimate
+
+        if connector_res.lifecycle_state == OrderLifecycleState.REJECTED.value or connector_res.status == TradeStatus.REJECTED.value:
+            record.status = TradeStatus.REJECTED.value
+            record.error_detail = connector_res.message[:500]
+            record.reconciled_at = datetime.now(timezone.utc)
+            self._record_transition(db, record, OrderLifecycleState.REJECTED, connector_res.message or "Broker rejected order")
+            db.commit()
+            db.refresh(record)
+            return self.to_order_response(record)
+
+        if connector_res.lifecycle_state == OrderLifecycleState.FAILED.value or connector_res.status == TradeStatus.FAILED.value:
+            record.status = TradeStatus.FAILED.value
+            record.error_detail = connector_res.message[:500]
+            record.reconciled_at = datetime.now(timezone.utc)
+            self._record_transition(db, record, OrderLifecycleState.FAILED, connector_res.message or "Broker execution failed")
+            db.commit()
+            db.refresh(record)
+            return self.to_order_response(record)
+
+        self._record_transition(
+            db,
+            record,
+            OrderLifecycleState.ACCEPTED,
+            f"Broker acknowledged order {record.broker_order_id}",
         )
-        db.add(record)
 
-        summary.total_trades += 1
-        summary.net_pnl = round(summary.net_pnl + verified_res.pnl, 2)
-        if verified_res.status == TradeStatus.WON.value:
-            summary.wins += 1
-            summary.consecutive_losses = 0
-        elif verified_res.status == TradeStatus.LOST.value:
-            summary.losses += 1
-            summary.consecutive_losses += 1
-            state.last_loss_epoch_ms = int(time.time() * 1000)
+        # Stage 9: Result Verification / Pending Handling
+        if connector_res.lifecycle_state == OrderLifecycleState.PENDING.value or connector_res.status == TradeStatus.PENDING.value:
+            record.status = TradeStatus.PENDING.value
+            record.error_detail = connector_res.message[:500]
+            self._record_transition(db, record, OrderLifecycleState.PENDING, connector_res.message or "Awaiting settlement")
+            db.commit()
+            db.refresh(record)
+            return self.to_order_response(record)
 
-        if summary.net_pnl < 0:
-            summary.peak_drawdown = max(summary.peak_drawdown, round(abs(summary.net_pnl), 2))
+        try:
+            verified_res = await self._connector.get_settlement_result(connector_res.order_id)
+        except Exception as exc:
+            record.status = TradeStatus.UNKNOWN.value
+            record.error_detail = f"Settlement verification error: {exc}"[:500]
+            self._record_transition(db, record, OrderLifecycleState.UNKNOWN, record.error_detail)
+            db.commit()
+            db.refresh(record)
+            return self.to_order_response(record)
 
-        state.simulation_balance = await self._connector.get_balance()
+        if verified_res.lifecycle_state == OrderLifecycleState.PENDING.value or verified_res.status == TradeStatus.PENDING.value:
+            record.status = TradeStatus.PENDING.value
+            self._record_transition(db, record, OrderLifecycleState.PENDING, "Settlement still pending")
+            db.commit()
+            db.refresh(record)
+            return self.to_order_response(record)
+
+        # Stage 10: Settled Trade Logging & Daily Risk Ledger Update
+        await self._finalize_settlement_ledger(db, record, verified_res, state, summary)
+        self._record_transition(
+            db,
+            record,
+            OrderLifecycleState.SETTLED,
+            verified_res.message or f"Settled as {record.settlement_outcome}",
+        )
         db.commit()
+        db.refresh(record)
+        return self.to_order_response(record)
 
-        return OrderSubmitResponse(
-            order_id=verified_res.order_id,
-            status=verified_res.status,
-            entry_price=verified_res.entry_price,
-            exit_price=verified_res.exit_price,
-            pnl=verified_res.pnl,
-            message=verified_res.message,
-        )

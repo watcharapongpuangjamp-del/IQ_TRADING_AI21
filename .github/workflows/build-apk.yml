@@ -69,6 +69,9 @@ jobs:
           if [ ! -f app/google-services.json ] && [ -n "$GOOGLE_SERVICES_JSON" ]; then
             printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
           fi
+          if [ ! -f app/google-services.json ]; then
+            echo "::warning::app/google-services.json not found and GOOGLE_SERVICES_JSON secret is empty. Firebase Auth/Firestore will display the setup notice until GOOGLE_SERVICES_JSON is configured."
+          fi
 
       - name: Run Quantitative & Risk Engine Unit Tests
         if: ${{ inputs.run_tests != 'false' }}

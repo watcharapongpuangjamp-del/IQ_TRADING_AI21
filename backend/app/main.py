@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.connectors.simulation import INSTRUMENT_SPECS, SimulationConnector
-from app.database import Base, SessionLocal, engine, get_db
+from app.database import SessionLocal, engine, ensure_schema_migrations, get_db
 from app.engines.execution_engine import (
     ExecutionAuthorizationError,
     ExecutionConnectorError,
@@ -43,9 +43,11 @@ from app.schemas import (
     ModeSwitchRequest,
     ModelRegistryItemResponse,
     MultiTimeframeReportSchema,
+    OrderLifecycleEventResponse,
     OrderSubmitRequest,
     OrderSubmitResponse,
     PromoteModelRequest,
+    ReconcileSummaryResponse,
     ReplayEvaluationResponse,
     ReplayStartRequest,
     ReplayStateResponse,
@@ -84,7 +86,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        Base.metadata.create_all(bind=engine)
+        ensure_schema_migrations(engine)
         db = SessionLocal()
         try:
             seed_initial_records(db)
@@ -94,8 +96,8 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(
         title=settings.app_name,
-        version="3.0.0",
-        description="IQ Trading AI Hybrid FastAPI Backend (Phase 3 AI Signal & ML Calibration)",
+        version="5.0.0",
+        description="IQ Trading AI Hybrid FastAPI Backend (Phase 5 Execution Lifecycle & Reconciliation)",
         lifespan=lifespan,
     )
 
@@ -537,6 +539,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             consecutive_losses=summary.consecutive_losses,
             emergency_stopped=policy.emergency_stopped,
             win_rate_pct=win_rate,
+            unresolved_orders_count=TradeExecutionEngine.count_unresolved_orders(db),
         )
 
     @application.post(
@@ -580,17 +583,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             .limit(limit)
             .all()
         )
-        return [
-            OrderSubmitResponse(
-                order_id=r.order_id,
-                status=r.status,
-                entry_price=r.entry_price,
-                exit_price=r.exit_price,
-                pnl=r.pnl,
-                message=f"{r.instrument} {r.direction} ({r.mode})",
-            )
-            for r in rows
-        ]
+        return [TradeExecutionEngine.to_order_response(r) for r in rows]
 
     @application.get(
         "/api/v1/orders/{order_id}",
@@ -602,14 +595,48 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         row = db.get(OrderRecordModel, order_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Order {order_id} not found.")
-        return OrderSubmitResponse(
-            order_id=row.order_id,
-            status=row.status,
-            entry_price=row.entry_price,
-            exit_price=row.exit_price,
-            pnl=row.pnl,
-            message=f"{row.instrument} {row.direction} ({row.mode})",
-        )
+        return TradeExecutionEngine.to_order_response(row)
+
+    @application.get(
+        "/api/v1/orders/{order_id}/events",
+        response_model=List[OrderLifecycleEventResponse],
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Execution"],
+    )
+    async def get_order_lifecycle_events(
+        order_id: str,
+        db: Session = Depends(get_db),
+    ) -> List[OrderLifecycleEventResponse]:
+        row = db.get(OrderRecordModel, order_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Order {order_id} not found.")
+        return TradeExecutionEngine.list_order_events(db, order_id)
+
+    @application.post(
+        "/api/v1/trading/reconcile",
+        response_model=ReconcileSummaryResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Execution"],
+    )
+    async def reconcile_all_unresolved_orders(
+        db: Session = Depends(get_db),
+    ) -> ReconcileSummaryResponse:
+        return await execution_engine.reconcile_unresolved_orders(db)
+
+    @application.post(
+        "/api/v1/orders/{order_id}/reconcile",
+        response_model=ReconcileSummaryResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Execution"],
+    )
+    async def reconcile_single_order(
+        order_id: str,
+        db: Session = Depends(get_db),
+    ) -> ReconcileSummaryResponse:
+        row = db.get(OrderRecordModel, order_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Order {order_id} not found.")
+        return await execution_engine.reconcile_unresolved_orders(db, target_order_id=order_id)
 
     @application.get(
         "/api/v1/risk/policy",

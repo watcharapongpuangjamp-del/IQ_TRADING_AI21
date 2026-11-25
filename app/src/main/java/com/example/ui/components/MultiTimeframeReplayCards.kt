@@ -206,8 +206,8 @@ fun MultiTimeframeIntelligenceCard(
     val (alignBg, alignFg) = when (mtfReport.alignmentState) {
         AlignmentState.ALIGNED_BULLISH -> tradingColors.bullishContainer to tradingColors.bullish
         AlignmentState.ALIGNED_BEARISH -> tradingColors.bearishContainer to tradingColors.bearish
-        AlignmentState.CONFLICT -> tradingColors.warningContainer to tradingColors.warning
-        AlignmentState.NEUTRAL -> tradingColors.cyanContainer to tradingColors.cyan
+        AlignmentState.CONFLICTING -> tradingColors.warningContainer to tradingColors.warning
+        AlignmentState.MIXED -> tradingColors.cyanContainer to tradingColors.cyan
     }
 
     Surface(

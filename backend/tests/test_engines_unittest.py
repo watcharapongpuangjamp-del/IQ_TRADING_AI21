@@ -317,11 +317,70 @@ class TestPurePythonEngines(unittest.TestCase):
                 direction="CALL",
                 amount=25.0,
                 expiry_seconds=60,
+                correlation_id="corr_test_001",
             )
         )
         self.assertIn(res.status, ("WON", "LOST"))
+        self.assertEqual(res.lifecycle_state, "SETTLED")
+        self.assertEqual(res.correlation_id, "corr_test_001")
         fetched = asyncio.run(self.connector.get_settlement_result(res.order_id))
         self.assertEqual(fetched.order_id, res.order_id)
+
+    def test_simulation_connector_pending_timeout_and_reconciliation(self) -> None:
+        start_balance = asyncio.run(self.connector.get_balance())
+
+        # 1. Deferred PENDING settlement resolves once via reconcile_order
+        self.connector.queue_simulation_behavior("PENDING")
+        pending_res = asyncio.run(
+            self.connector.submit_order(
+                instrument="EUR/USD",
+                timeframe="1m",
+                direction="CALL",
+                amount=20.0,
+                expiry_seconds=60,
+                correlation_id="corr_pending_001",
+            )
+        )
+        self.assertEqual(pending_res.lifecycle_state, "PENDING")
+        self.assertEqual(asyncio.run(self.connector.get_balance()), start_balance)
+
+        reconciled = asyncio.run(
+            self.connector.reconcile_order(pending_res.order_id, correlation_id="corr_pending_001")
+        )
+        self.assertEqual(reconciled.lifecycle_state, "SETTLED")
+        self.assertIn(reconciled.settlement_outcome, ("WON", "LOST"))
+        balance_after_pending = asyncio.run(self.connector.get_balance())
+        self.assertAlmostEqual(balance_after_pending, start_balance + reconciled.pnl, places=2)
+
+        # Idempotent second reconcile must NOT double-credit/debit balance
+        reconciled_again = asyncio.run(
+            self.connector.reconcile_order(pending_res.order_id, correlation_id="corr_pending_001")
+        )
+        self.assertEqual(reconciled_again.order_id, reconciled.order_id)
+        self.assertAlmostEqual(asyncio.run(self.connector.get_balance()), balance_after_pending, places=2)
+
+        # 2. Transport TIMEOUT with persistent_unknown blocks reconciliation until cleared
+        self.connector.queue_simulation_behavior("TIMEOUT", persistent_unknown=True)
+        with self.assertRaises(TimeoutError):
+            asyncio.run(
+                self.connector.submit_order(
+                    instrument="EUR/USD",
+                    timeframe="1m",
+                    direction="PUT",
+                    amount=15.0,
+                    expiry_seconds=60,
+                    correlation_id="corr_timeout_002",
+                )
+            )
+        with self.assertRaises(TimeoutError):
+            asyncio.run(self.connector.reconcile_order("ord_missing", correlation_id="corr_timeout_002"))
+
+        self.connector.set_persistent_unknown(False)
+        settled_timeout = asyncio.run(
+            self.connector.reconcile_order("ord_missing", correlation_id="corr_timeout_002")
+        )
+        self.assertEqual(settled_timeout.lifecycle_state, "SETTLED")
+        self.assertEqual(settled_timeout.correlation_id, "corr_timeout_002")
 
 
 if __name__ == "__main__":

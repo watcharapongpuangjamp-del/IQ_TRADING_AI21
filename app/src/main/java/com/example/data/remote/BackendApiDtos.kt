@@ -1,11 +1,15 @@
 package com.example.data.remote
 
 import com.example.model.AlignmentState
+import com.example.model.BackendOrderSummary
 import com.example.model.Candle
 import com.example.model.DataQualitySummary
 import com.example.model.MarketRegime
 import com.example.model.MlModelSummary
 import com.example.model.MultiTimeframeReport
+import com.example.model.OrderLifecycleEvent
+import com.example.model.OrderLifecycleState
+import com.example.model.ReconcileSummary
 import com.example.model.ReplaySessionState
 import com.example.model.RiskPolicy
 import com.example.model.SignalAnalysis
@@ -164,7 +168,7 @@ data class TimeframeIntelligenceDto(
 data class MultiTimeframeReportDto(
     val instrument: String = "EUR/USD",
     val primary_timeframe: String = "1m",
-    val alignment_state: String = AlignmentState.NEUTRAL.name,
+    val alignment_state: String = AlignmentState.MIXED.name,
     val alignment_score: Int = 50,
     val higher_tf_bias: String = "NO_TRADE",
     val timeframe_summaries: List<TimeframeIntelligenceDto> = emptyList(),
@@ -317,8 +321,69 @@ data class OrderSubmitResponseDto(
     val entry_price: Double,
     val exit_price: Double = 0.0,
     val pnl: Double = 0.0,
-    val message: String? = null
-)
+    val message: String? = null,
+    val correlation_id: String = "",
+    val broker_order_id: String? = null,
+    val lifecycle_state: String = "SETTLED",
+    val settlement_outcome: String? = null,
+    val reconciled_at: String? = null,
+    val requires_reconciliation: Boolean = false
+) {
+    fun toDomain(): BackendOrderSummary = BackendOrderSummary(
+        orderId = order_id,
+        correlationId = correlation_id,
+        brokerOrderId = broker_order_id,
+        status = status,
+        lifecycleState = OrderLifecycleState.safeValueOf(lifecycle_state),
+        settlementOutcome = settlement_outcome,
+        entryPrice = entry_price,
+        exitPrice = exit_price,
+        pnl = pnl,
+        requiresReconciliation = requires_reconciliation,
+        message = message.orEmpty()
+    )
+}
+
+@JsonClass(generateAdapter = true)
+data class OrderLifecycleEventDto(
+    val event_id: String,
+    val order_id: String,
+    val correlation_id: String,
+    val from_state: String? = null,
+    val to_state: String,
+    val detail: String = "",
+    val created_at: String = ""
+) {
+    fun toDomain(): OrderLifecycleEvent = OrderLifecycleEvent(
+        eventId = event_id,
+        orderId = order_id,
+        correlationId = correlation_id,
+        fromState = from_state,
+        toState = to_state,
+        detail = detail,
+        createdAt = created_at
+    )
+}
+
+@JsonClass(generateAdapter = true)
+data class ReconcileSummaryDto(
+    val checked_count: Int = 0,
+    val settled_count: Int = 0,
+    val pending_count: Int = 0,
+    val unknown_count: Int = 0,
+    val failed_count: Int = 0,
+    val orders: List<OrderSubmitResponseDto> = emptyList(),
+    val message: String = ""
+) {
+    fun toDomain(): ReconcileSummary = ReconcileSummary(
+        checkedCount = checked_count,
+        settledCount = settled_count,
+        pendingCount = pending_count,
+        unknownCount = unknown_count,
+        failedCount = failed_count,
+        message = message
+    )
+}
 
 @JsonClass(generateAdapter = true)
 data class ModeSwitchRequestDto(
@@ -339,7 +404,8 @@ data class TradingStateDto(
     val net_pnl_today: Double = 0.0,
     val consecutive_losses: Int = 0,
     val emergency_stopped: Boolean = false,
-    val win_rate_pct: Double = 0.0
+    val win_rate_pct: Double = 0.0,
+    val unresolved_orders_count: Int = 0
 )
 
 @JsonClass(generateAdapter = true)

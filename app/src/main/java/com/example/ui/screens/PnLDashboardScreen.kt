@@ -36,7 +36,15 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import com.example.model.BackendOrderSummary
 import com.example.model.DailyPnLSummary
+import com.example.model.OrderLifecycleEvent
+import com.example.model.OrderLifecycleState
 import com.example.model.TradeRecord
 import com.example.model.TradeStatus
 import com.example.ui.theme.LocalTradingColors
@@ -50,10 +58,17 @@ fun PnLDashboardScreen(
     dailySummaries: List<DailyPnLSummary>,
     trades: List<TradeRecord>,
     todayDateKey: String,
+    backendOrders: List<BackendOrderSummary> = emptyList(),
+    selectedOrderEvents: List<OrderLifecycleEvent> = emptyList(),
+    isReconciling: Boolean = false,
+    onReconcileOrders: (String?) -> Unit = {},
+    onSelectBackendOrder: (String) -> Unit = {},
+    onClearOrderEvents: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
     var selectedTrade by remember { mutableStateOf<TradeRecord?>(null) }
+    var selectedBackendOrder by remember { mutableStateOf<BackendOrderSummary?>(null) }
 
     val todaySummary = dailySummaries.firstOrNull { it.dateKey == todayDateKey }
     val todayPnl = todaySummary?.netPnl ?: 0.0
@@ -174,6 +189,97 @@ fun PnLDashboardScreen(
             }
         }
 
+        // Backend Execution Lifecycle & Reconciliation Section
+        if (backendOrders.isNotEmpty()) {
+            item {
+                val unresolvedCount = backendOrders.count { it.requiresReconciliation }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Execution Lifecycle (${backendOrders.size})",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = if (unresolvedCount > 0) "ค้างตรวจสอบ $unresolvedCount รายการ" else "ออเดอร์ Backend ซิงค์ครบถ้วน",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (unresolvedCount > 0) tradingColors.warning else tradingColors.bullish
+                        )
+                    }
+                    if (unresolvedCount > 0) {
+                        Button(
+                            onClick = { onReconcileOrders(null) },
+                            enabled = !isReconciling,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = tradingColors.warning,
+                                contentColor = tradingColors.surfaceCanvas
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.height(48.dp)
+                        ) {
+                            Text(if (isReconciling) "กำลังตรวจ..." else "Reconcile All", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            items(backendOrders.take(10), key = { "be_${it.orderId}" }) { order ->
+                val badgeColor = when (order.lifecycleState) {
+                    OrderLifecycleState.SETTLED -> if (order.pnl >= 0) tradingColors.bullish else tradingColors.bearish
+                    OrderLifecycleState.PENDING -> tradingColors.warning
+                    OrderLifecycleState.UNKNOWN, OrderLifecycleState.REJECTED, OrderLifecycleState.FAILED -> tradingColors.bearish
+                    else -> tradingColors.cyan
+                }
+                Surface(
+                    color = tradingColors.surfaceElevated,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(
+                        1.dp,
+                        if (order.requiresReconciliation) tradingColors.warning.copy(alpha = 0.65f) else tradingColors.cardBorder
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            selectedBackendOrder = order
+                            onSelectBackendOrder(order.orderId)
+                        }
+                        .testTag("backend_order_${order.orderId}")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "${order.orderId} • ${order.lifecycleState.name}",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = badgeColor,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Corr: ${order.correlationId.ifBlank { "-" }} • ${order.message.take(48)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (order.requiresReconciliation) order.lifecycleState.name
+                            else "${if (order.pnl >= 0) "+" else "-"}$${String.format("%.2f", abs(order.pnl))}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = badgeColor,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
         // Trade History Header
         item {
             Text(
@@ -219,9 +325,9 @@ fun PnLDashboardScreen(
                 val statusEnum = TradeStatus.safeValueOf(trade.status)
                 val statusColor = when (statusEnum) {
                     TradeStatus.WON -> tradingColors.bullish
-                    TradeStatus.LOST, TradeStatus.REJECTED -> tradingColors.bearish
+                    TradeStatus.LOST, TradeStatus.REJECTED, TradeStatus.FAILED -> tradingColors.bearish
                     TradeStatus.OPEN -> tradingColors.cyan
-                    TradeStatus.CANCELLED -> tradingColors.warning
+                    TradeStatus.CANCELLED, TradeStatus.PENDING, TradeStatus.UNKNOWN -> tradingColors.warning
                 }
                 Surface(
                     color = tradingColors.surfaceElevated,
@@ -293,6 +399,57 @@ fun PnLDashboardScreen(
             },
             confirmButton = {
                 TextButton(onClick = { selectedTrade = null }) {
+                    Text("ปิด")
+                }
+            }
+        )
+    }
+
+    selectedBackendOrder?.let { order ->
+        AlertDialog(
+            onDismissRequest = {
+                selectedBackendOrder = null
+                onClearOrderEvents()
+            },
+            containerColor = tradingColors.surfaceElevated,
+            title = { Text("Order ${order.orderId} • ${order.lifecycleState.name}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Correlation ID: ${order.correlationId.ifBlank { "-" }}")
+                    Text("Broker Order ID: ${order.brokerOrderId ?: "-"}")
+                    Text("สถานะ: ${order.lifecycleState.labelTh} (${order.status})")
+                    Text("เข้า: ${order.entryPrice} -> ออก: ${order.exitPrice} | P&L: $${String.format("%.2f", order.pnl)}")
+                    if (selectedOrderEvents.isNotEmpty()) {
+                        Text("Audit Trail:", fontWeight = FontWeight.Bold, color = tradingColors.cyan)
+                        selectedOrderEvents.forEach { evt ->
+                            Text(
+                                text = "• ${evt.fromState ?: "START"} -> ${evt.toState}: ${evt.detail}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+            },
+            dismissButton = {
+                if (order.requiresReconciliation) {
+                    OutlinedButton(
+                        onClick = {
+                            onReconcileOrders(order.orderId)
+                            selectedBackendOrder = null
+                            onClearOrderEvents()
+                        }
+                    ) {
+                        Text("Reconcile Order")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        selectedBackendOrder = null
+                        onClearOrderEvents()
+                    }
+                ) {
                     Text("ปิด")
                 }
             }

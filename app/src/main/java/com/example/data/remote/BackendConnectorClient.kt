@@ -1,9 +1,12 @@
 package com.example.data.remote
 
 import com.example.model.BackendHealthState
+import com.example.model.BackendOrderSummary
 import com.example.model.Candle
 import com.example.model.ExecutionMode
 import com.example.model.MlModelSummary
+import com.example.model.OrderLifecycleEvent
+import com.example.model.ReconcileSummary
 import com.example.model.RiskPolicy
 import com.example.model.StrategyConfig
 import com.squareup.moshi.Moshi
@@ -112,6 +115,29 @@ interface FastApiTradingApi {
         @Body request: OrderSubmitRequestDto
     ): Response<OrderSubmitResponseDto>
 
+    @GET("api/v1/orders")
+    suspend fun listOrders(
+        @Header("Authorization") authHeader: String?,
+        @Query("limit") limit: Int = 50
+    ): Response<List<OrderSubmitResponseDto>>
+
+    @GET("api/v1/orders/{orderId}/events")
+    suspend fun getOrderLifecycleEvents(
+        @Header("Authorization") authHeader: String?,
+        @Path("orderId") orderId: String
+    ): Response<List<OrderLifecycleEventDto>>
+
+    @POST("api/v1/trading/reconcile")
+    suspend fun reconcileAllOrders(
+        @Header("Authorization") authHeader: String?
+    ): Response<ReconcileSummaryDto>
+
+    @POST("api/v1/orders/{orderId}/reconcile")
+    suspend fun reconcileSingleOrder(
+        @Header("Authorization") authHeader: String?,
+        @Path("orderId") orderId: String
+    ): Response<ReconcileSummaryDto>
+
     @GET("api/v1/ml/models")
     suspend fun listMlModels(
         @Header("Authorization") authHeader: String?,
@@ -146,6 +172,8 @@ class BackendConnectorClient {
     private val tickAdapter = moshi.adapter(WebSocketTickDto::class.java)
     private val intelligenceAdapter = moshi.adapter(MarketIntelligenceResponseDto::class.java)
     private val modelAdapter = moshi.adapter(ModelRegistryItemDto::class.java)
+    private val orderResponseAdapter = moshi.adapter(OrderSubmitResponseDto::class.java)
+    private val reconcileAdapter = moshi.adapter(ReconcileSummaryDto::class.java)
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
@@ -214,6 +242,22 @@ class BackendConnectorClient {
     fun parseModelRegistryItemJson(rawJson: String): ModelRegistryItemDto? {
         return try {
             modelAdapter.fromJson(rawJson)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun parseOrderSubmitResponseJson(rawJson: String): OrderSubmitResponseDto? {
+        return try {
+            orderResponseAdapter.fromJson(rawJson)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun parseReconcileSummaryJson(rawJson: String): ReconcileSummaryDto? {
+        return try {
+            reconcileAdapter.fromJson(rawJson)
         } catch (_: Exception) {
             null
         }
@@ -450,7 +494,56 @@ class BackendConnectorClient {
         if (response.isSuccessful && response.body() != null) {
             response.body()!!
         } else {
-            throw IllegalStateException("Order rejected HTTP ${response.code()}")
+            val detail = response.errorBody()?.string()?.take(240)
+            throw IllegalStateException(
+                if (!detail.isNullOrBlank()) "Order rejected HTTP ${response.code()}: $detail"
+                else "Order rejected HTTP ${response.code()}"
+            )
+        }
+    }
+
+    suspend fun fetchBackendOrders(
+        baseUrl: String,
+        bearerToken: String?,
+        limit: Int = 50
+    ): Result<List<BackendOrderSummary>> = safeCall {
+        val response = buildApi(baseUrl).listOrders(buildAuthHeader(bearerToken), limit)
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!.map { it.toDomain() }
+        } else {
+            throw IllegalStateException("Orders HTTP ${response.code()}")
+        }
+    }
+
+    suspend fun fetchOrderLifecycleEvents(
+        baseUrl: String,
+        bearerToken: String?,
+        orderId: String
+    ): Result<List<OrderLifecycleEvent>> = safeCall {
+        val response = buildApi(baseUrl).getOrderLifecycleEvents(buildAuthHeader(bearerToken), orderId)
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!.map { it.toDomain() }
+        } else {
+            throw IllegalStateException("Order events HTTP ${response.code()}")
+        }
+    }
+
+    suspend fun reconcileOrders(
+        baseUrl: String,
+        bearerToken: String?,
+        orderId: String? = null
+    ): Result<ReconcileSummary> = safeCall {
+        val api = buildApi(baseUrl)
+        val auth = buildAuthHeader(bearerToken)
+        val response = if (orderId.isNullOrBlank()) {
+            api.reconcileAllOrders(auth)
+        } else {
+            api.reconcileSingleOrder(auth, orderId)
+        }
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!.toDomain()
+        } else {
+            throw IllegalStateException("Reconcile HTTP ${response.code()}")
         }
     }
 

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -11,6 +11,10 @@ class ConnectorOrderResult:
     exit_price: float = 0.0
     pnl: float = 0.0
     message: str = ""
+    lifecycle_state: str = "SETTLED"
+    settlement_outcome: Optional[str] = None
+    broker_order_id: Optional[str] = None
+    correlation_id: Optional[str] = None
 
 
 class BrokerConnector(ABC):
@@ -63,6 +67,7 @@ class BrokerConnector(ABC):
         direction: str,
         amount: float,
         expiry_seconds: int,
+        correlation_id: Optional[str] = None,
     ) -> ConnectorOrderResult:
         ...
 
@@ -72,4 +77,12 @@ class BrokerConnector(ABC):
 
     @abstractmethod
     async def get_settlement_result(self, order_id: str) -> ConnectorOrderResult:
+        ...
+
+    @abstractmethod
+    async def reconcile_order(
+        self,
+        order_id: str,
+        correlation_id: Optional[str] = None,
+    ) -> ConnectorOrderResult:
         ...

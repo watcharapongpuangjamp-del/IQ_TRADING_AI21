@@ -210,4 +210,54 @@ class TradingEnginesUnitTest {
         assertEquals("5m", mtf.timeframeSummaries[1].timeframe)
         assertEquals("15m", mtf.timeframeSummaries[2].timeframe)
     }
+
+    @Test
+    fun phase5_orderLifecycleAndAlignmentAndReconcileDtos_parseAccurately() {
+        assertEquals(10, com.example.model.OrderLifecycleState.entries.size)
+        assertTrue(com.example.model.OrderLifecycleState.PENDING.isUnresolved)
+        assertTrue(com.example.model.OrderLifecycleState.UNKNOWN.isUnresolved)
+        assertFalse(com.example.model.OrderLifecycleState.SETTLED.isUnresolved)
+
+        assertEquals(com.example.model.AlignmentState.MIXED, com.example.model.AlignmentState.safeValueOf("MIXED"))
+        assertEquals(com.example.model.AlignmentState.CONFLICTING, com.example.model.AlignmentState.safeValueOf("CONFLICTING"))
+        assertEquals(com.example.model.AlignmentState.CONFLICTING, com.example.model.AlignmentState.safeValueOf("CONFLICT"))
+
+        assertEquals("OPEN", com.example.model.TradeStatus.toFirestoreStatus("PENDING"))
+        assertEquals("OPEN", com.example.model.TradeStatus.toFirestoreStatus("UNKNOWN"))
+        assertEquals("CANCELLED", com.example.model.TradeStatus.toFirestoreStatus("FAILED"))
+
+        val client = com.example.data.remote.BackendConnectorClient()
+        val orderJson = """
+            {
+              "order_id": "ord_abc123",
+              "status": "UNKNOWN",
+              "entry_price": 1.0845,
+              "exit_price": 0.0,
+              "pnl": 0.0,
+              "correlation_id": "corr_xyz789",
+              "lifecycle_state": "UNKNOWN",
+              "requires_reconciliation": true,
+              "message": "Order status UNKNOWN — reconciliation required"
+            }
+        """.trimIndent()
+        val parsedOrder = client.parseOrderSubmitResponseJson(orderJson)?.toDomain()
+        assertEquals("corr_xyz789", parsedOrder?.correlationId)
+        assertEquals(com.example.model.OrderLifecycleState.UNKNOWN, parsedOrder?.lifecycleState)
+        assertTrue(parsedOrder?.requiresReconciliation == true)
+
+        val reconcileJson = """
+            {
+              "checked_count": 1,
+              "settled_count": 1,
+              "pending_count": 0,
+              "unknown_count": 0,
+              "failed_count": 0,
+              "orders": [],
+              "message": "Reconciled 1 order(s): 1 settled"
+            }
+        """.trimIndent()
+        val parsedReconcile = client.parseReconcileSummaryJson(reconcileJson)?.toDomain()
+        assertEquals(1, parsedReconcile?.checkedCount)
+        assertEquals(1, parsedReconcile?.settledCount)
+    }
 }

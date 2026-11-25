@@ -18,6 +18,7 @@ import com.example.engine.RiskManagementEngine
 import com.example.engine.SignalEngine
 import com.example.engine.TechnicalAnalysisEngine
 import com.example.model.BackendHealthState
+import com.example.model.BackendOrderSummary
 import com.example.model.Candle
 import com.example.model.DailyPnLSummary
 import com.example.model.DataQualitySummary
@@ -26,6 +27,8 @@ import com.example.model.ExecutionStage
 import com.example.model.IntegrationSettings
 import com.example.model.MlModelSummary
 import com.example.model.MultiTimeframeReport
+import com.example.model.OrderLifecycleEvent
+import com.example.model.OrderLifecycleState
 import com.example.model.ReplaySessionState
 import com.example.model.RiskPolicy
 import com.example.model.RiskValidationResult
@@ -80,7 +83,11 @@ data class TerminalUiState(
     val executionStage: ExecutionStage = ExecutionStage.IDLE,
     val lastOrderFeedback: String? = null,
     val isOrderInFlight: Boolean = false,
-    val lastLossTimestampMillis: Long? = null
+    val lastLossTimestampMillis: Long? = null,
+    val unresolvedOrdersCount: Int = 0,
+    val isReconciling: Boolean = false,
+    val lastOrderCorrelationId: String? = null,
+    val lastOrderLifecycleState: OrderLifecycleState? = null
 )
 
 class TradingViewModel(
@@ -116,6 +123,12 @@ class TradingViewModel(
 
     private val _isMlBusy = MutableStateFlow(false)
     val isMlBusy: StateFlow<Boolean> = _isMlBusy.asStateFlow()
+
+    private val _backendOrders = MutableStateFlow<List<BackendOrderSummary>>(emptyList())
+    val backendOrders: StateFlow<List<BackendOrderSummary>> = _backendOrders.asStateFlow()
+
+    private val _selectedOrderEvents = MutableStateFlow<List<OrderLifecycleEvent>>(emptyList())
+    val selectedOrderEvents: StateFlow<List<OrderLifecycleEvent>> = _selectedOrderEvents.asStateFlow()
 
     val integrationSettings: StateFlow<IntegrationSettings> = credentialVault.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), IntegrationSettings())
@@ -214,6 +227,7 @@ class TradingViewModel(
                         .getOrNull()?.takeIf { it.size >= 25 }?.let { candles = it }
                     remoteIntel = backendClient.fetchMarketIntelligence(settings.backendBaseUrl, token, instrument).getOrNull()
                     refreshMlModelsInternal(settings.backendBaseUrl, token, instrument)
+                    refreshBackendExecutionState(settings.backendBaseUrl, token)
                 }
             }
 
@@ -570,10 +584,16 @@ class TradingViewModel(
             val entryPrice = candles.last().close
 
             _terminalState.update { it.copy(executionStage = ExecutionStage.ORDER_SUBMISSION) }
-            if (mode != ExecutionMode.SIMULATION && integrationSettings.value.backendBaseUrl.isNotBlank()) {
+            val settings = integrationSettings.value
+            val useBackendExecution = _backendHealth.value.connected &&
+                _terminalState.value.replayState?.active != true &&
+                backendClient.isValidHttpUrl(settings.backendBaseUrl)
+
+            if (useBackendExecution) {
+                val backendToken = credentialVault.getBackendToken()
                 val remoteSubmit = backendClient.submitOrder(
-                    baseUrl = integrationSettings.value.backendBaseUrl,
-                    bearerToken = credentialVault.getBackendToken(),
+                    baseUrl = settings.backendBaseUrl,
+                    bearerToken = backendToken,
                     request = OrderSubmitRequestDto(
                         instrument = strategy.instrument,
                         timeframe = _terminalState.value.selectedTimeframe.code,
@@ -585,12 +605,131 @@ class TradingViewModel(
                     )
                 )
                 if (remoteSubmit.isFailure) {
+                    refreshBackendExecutionState(settings.backendBaseUrl, backendToken)
                     finishPipeline(
                         ExecutionStage.IDLE,
-                        "ส่งคำสั่งไปยัง FastAPI ไม่สำเร็จ: ${remoteSubmit.exceptionOrNull()?.localizedMessage}"
+                        "คำสั่งถูกปฏิเสธโดย Backend: ${remoteSubmit.exceptionOrNull()?.localizedMessage}"
                     )
                     return
                 }
+
+                val dto = remoteSubmit.getOrThrow()
+                val lifecycle = OrderLifecycleState.safeValueOf(dto.lifecycle_state)
+                _terminalState.update {
+                    it.copy(
+                        lastOrderCorrelationId = dto.correlation_id.ifBlank { null },
+                        lastOrderLifecycleState = lifecycle
+                    )
+                }
+
+                if (lifecycle == OrderLifecycleState.PENDING || lifecycle == OrderLifecycleState.UNKNOWN) {
+                    val openTrade = TradeRecord(
+                        userId = currentUserId,
+                        instrument = strategy.instrument,
+                        timeframe = _terminalState.value.selectedTimeframe.code,
+                        direction = directionToUse.name,
+                        mode = mode.name,
+                        amount = strategy.tradeAmount,
+                        payoutRate = spec.payoutRate,
+                        entryPrice = dto.entry_price,
+                        exitPrice = 0.0,
+                        status = TradeStatus.OPEN.name,
+                        pnl = 0.0,
+                        strategyName = strategy.name,
+                        confidenceScore = currentSignal.confidenceScore,
+                        calibratedProbability = currentSignal.calibratedProbability,
+                        explanation = "${currentSignal.explanation} [Corr: ${dto.correlation_id} | State: ${lifecycle.name}]"
+                    )
+                    val localId = cloudRepository.createTrade(openTrade).getOrElse { dto.order_id }
+                    persistTradeToRoom(
+                        tradeId = localId,
+                        strategy = strategy,
+                        direction = directionToUse,
+                        mode = mode,
+                        payoutRate = spec.payoutRate,
+                        entryPrice = dto.entry_price,
+                        exitPrice = 0.0,
+                        status = lifecycle.name,
+                        pnl = 0.0,
+                        signal = currentSignal
+                    )
+                    refreshBackendExecutionState(settings.backendBaseUrl, backendToken)
+                    finishPipeline(
+                        ExecutionStage.IDLE,
+                        "คำสั่ง ${dto.correlation_id} สถานะ ${lifecycle.name} — กรุณากด Reconcile ก่อนเปิดไม้ใหม่"
+                    )
+                    return
+                }
+
+                if (lifecycle == OrderLifecycleState.REJECTED || lifecycle == OrderLifecycleState.FAILED) {
+                    refreshBackendExecutionState(settings.backendBaseUrl, backendToken)
+                    finishPipeline(
+                        ExecutionStage.IDLE,
+                        "คำสั่งไม่สำเร็จ (${lifecycle.name}): ${dto.message.orEmpty()}"
+                    )
+                    return
+                }
+
+                // Settled cleanly by Backend BrokerConnector
+                _terminalState.update { it.copy(executionStage = ExecutionStage.RESULT_VERIFICATION) }
+                val outcome = dto.settlement_outcome ?: dto.status
+                val won = outcome.equals(TradeStatus.WON.name, ignoreCase = true)
+                val finalStatus = if (won) TradeStatus.WON else TradeStatus.LOST
+
+                _terminalState.update { it.copy(executionStage = ExecutionStage.TRADE_LOGGING) }
+                val settledTrade = TradeRecord(
+                    userId = currentUserId,
+                    instrument = strategy.instrument,
+                    timeframe = _terminalState.value.selectedTimeframe.code,
+                    direction = directionToUse.name,
+                    mode = mode.name,
+                    amount = strategy.tradeAmount,
+                    payoutRate = spec.payoutRate,
+                    entryPrice = dto.entry_price,
+                    exitPrice = dto.exit_price,
+                    status = TradeStatus.toFirestoreStatus(finalStatus.name),
+                    pnl = dto.pnl,
+                    strategyName = strategy.name,
+                    confidenceScore = currentSignal.confidenceScore,
+                    calibratedProbability = currentSignal.calibratedProbability,
+                    explanation = "${currentSignal.explanation} [Corr: ${dto.correlation_id}]"
+                )
+                val createdId = cloudRepository.createTrade(settledTrade).getOrElse { dto.order_id }
+                persistTradeToRoom(
+                    tradeId = createdId,
+                    strategy = strategy,
+                    direction = directionToUse,
+                    mode = mode,
+                    payoutRate = spec.payoutRate,
+                    entryPrice = dto.entry_price,
+                    exitPrice = dto.exit_price,
+                    status = finalStatus.name,
+                    pnl = dto.pnl,
+                    signal = currentSignal
+                )
+
+                _terminalState.update { it.copy(executionStage = ExecutionStage.PERFORMANCE_EVAL) }
+                updateProfileAndDailySummary(pnl = dto.pnl, won = won)
+                if (!won) {
+                    _terminalState.update { it.copy(lastLossTimestampMillis = System.currentTimeMillis()) }
+                }
+                refreshBackendExecutionState(settings.backendBaseUrl, backendToken)
+
+                val resultBadge = if (won) "WON (+$${format2(dto.pnl)})" else "LOST (-$${format2(strategy.tradeAmount)})"
+                dispatchAlerts(
+                    isTradeResult = true,
+                    title = "TRADE SETTLED • $resultBadge",
+                    lines = listOf(
+                        "${strategy.instrument} ${directionToUse.name}: ${formatPrice(dto.entry_price)} -> ${formatPrice(dto.exit_price)}",
+                        "Corr: ${dto.correlation_id} | Balance: $${format2(currentBalance() + dto.pnl)}"
+                    )
+                )
+                finishPipeline(
+                    ExecutionStage.IDLE,
+                    if (won) "ปิดออเดอร์ ${directionToUse.name} ชนะ +$${format2(dto.pnl)} (${dto.correlation_id})"
+                    else "ปิดออเดอร์ ${directionToUse.name} ขาดทุน -$${format2(strategy.tradeAmount)} (${dto.correlation_id})"
+                )
+                return
             }
 
             val pendingTrade = TradeRecord(
@@ -643,30 +782,18 @@ class TradingViewModel(
 
             _terminalState.update { it.copy(executionStage = ExecutionStage.TRADE_LOGGING) }
             cloudRepository.settleTrade(createdId, exitPrice, finalStatus, pnl)
-            withContext(Dispatchers.IO) {
-                tradingDao.upsertTrade(
-                    LocalTradeCacheEntity(
-                        tradeId = createdId,
-                        userId = currentUserId,
-                        instrument = strategy.instrument,
-                        timeframe = _terminalState.value.selectedTimeframe.code,
-                        direction = directionToUse.name,
-                        mode = mode.name,
-                        amount = strategy.tradeAmount,
-                        payoutRate = spec.payoutRate,
-                        entryPrice = entryPrice,
-                        exitPrice = exitPrice,
-                        status = finalStatus.name,
-                        pnl = pnl,
-                        strategyName = strategy.name,
-                        confidenceScore = currentSignal.confidenceScore,
-                        calibratedProbability = currentSignal.calibratedProbability,
-                        explanation = currentSignal.explanation,
-                        createdAtMillis = System.currentTimeMillis(),
-                        syncedToCloud = true
-                    )
-                )
-            }
+            persistTradeToRoom(
+                tradeId = createdId,
+                strategy = strategy,
+                direction = directionToUse,
+                mode = mode,
+                payoutRate = spec.payoutRate,
+                entryPrice = entryPrice,
+                exitPrice = exitPrice,
+                status = finalStatus.name,
+                pnl = pnl,
+                signal = currentSignal
+            )
 
             _terminalState.update { it.copy(executionStage = ExecutionStage.PERFORMANCE_EVAL) }
             updateProfileAndDailySummary(pnl = pnl, won = won)
@@ -751,6 +878,95 @@ class TradingViewModel(
                     _snackbarMessage.value = "Promote โมเดลไม่สำเร็จ: ${it.localizedMessage}"
                 }
             _isMlBusy.value = false
+        }
+    }
+
+    // --- Execution Reconciliation & Lifecycle Audit (Phase 5) ---
+
+    fun reconcileBackendOrders(orderId: String? = null) {
+        viewModelScope.launch {
+            val baseUrl = integrationSettings.value.backendBaseUrl
+            if (!backendClient.isValidHttpUrl(baseUrl)) {
+                _snackbarMessage.value = "กรุณาเชื่อมต่อ FastAPI Backend ก่อนทำ Reconciliation"
+                return@launch
+            }
+            _terminalState.update { it.copy(isReconciling = true) }
+            val token = credentialVault.getBackendToken()
+            backendClient.reconcileOrders(baseUrl, token, orderId)
+                .onSuccess { summary ->
+                    refreshBackendExecutionState(baseUrl, token)
+                    _snackbarMessage.value = summary.message.ifBlank {
+                        "ตรวจสอบออเดอร์ ${summary.checkedCount} รายการ: ปิดบัญชี ${summary.settledCount} รายการ"
+                    }
+                }
+                .onFailure {
+                    _snackbarMessage.value = "Reconciliation ไม่สำเร็จ: ${it.localizedMessage}"
+                }
+            _terminalState.update { it.copy(isReconciling = false) }
+        }
+    }
+
+    fun loadOrderLifecycleEvents(orderId: String) {
+        viewModelScope.launch {
+            val baseUrl = integrationSettings.value.backendBaseUrl
+            if (!backendClient.isValidHttpUrl(baseUrl)) return@launch
+            val token = credentialVault.getBackendToken()
+            backendClient.fetchOrderLifecycleEvents(baseUrl, token, orderId)
+                .onSuccess { events -> _selectedOrderEvents.value = events }
+                .onFailure { _selectedOrderEvents.value = emptyList() }
+        }
+    }
+
+    fun clearSelectedOrderEvents() {
+        _selectedOrderEvents.value = emptyList()
+    }
+
+    private suspend fun refreshBackendExecutionState(baseUrl: String, token: String?) {
+        backendClient.fetchTradingState(baseUrl, token).onSuccess { stateDto ->
+            _terminalState.update { it.copy(unresolvedOrdersCount = stateDto.unresolved_orders_count) }
+        }
+        backendClient.fetchBackendOrders(baseUrl, token, limit = 30).onSuccess { list ->
+            _backendOrders.value = list
+            val unresolved = list.count { it.requiresReconciliation }
+            _terminalState.update { it.copy(unresolvedOrdersCount = maxOf(it.unresolvedOrdersCount, unresolved)) }
+        }
+    }
+
+    private suspend fun persistTradeToRoom(
+        tradeId: String,
+        strategy: StrategyConfig,
+        direction: TradeDirection,
+        mode: ExecutionMode,
+        payoutRate: Double,
+        entryPrice: Double,
+        exitPrice: Double,
+        status: String,
+        pnl: Double,
+        signal: SignalAnalysis
+    ) {
+        withContext(Dispatchers.IO) {
+            tradingDao.upsertTrade(
+                LocalTradeCacheEntity(
+                    tradeId = tradeId,
+                    userId = currentUserId,
+                    instrument = strategy.instrument,
+                    timeframe = _terminalState.value.selectedTimeframe.code,
+                    direction = direction.name,
+                    mode = mode.name,
+                    amount = strategy.tradeAmount,
+                    payoutRate = payoutRate,
+                    entryPrice = entryPrice,
+                    exitPrice = exitPrice,
+                    status = status,
+                    pnl = pnl,
+                    strategyName = strategy.name,
+                    confidenceScore = signal.confidenceScore,
+                    calibratedProbability = signal.calibratedProbability,
+                    explanation = signal.explanation,
+                    createdAtMillis = System.currentTimeMillis(),
+                    syncedToCloud = true
+                )
+            )
         }
     }
 
@@ -905,6 +1121,7 @@ class TradingViewModel(
             _snackbarMessage.value = health.statusMessage
             if (health.connected) {
                 refreshMlModelsInternal(url, token, _terminalState.value.selectedInstrument)
+                refreshBackendExecutionState(url, token)
             }
         }
     }

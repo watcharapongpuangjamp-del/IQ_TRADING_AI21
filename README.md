@@ -21,6 +21,7 @@
 โปรเจกต์นี้มี Workflow ที่ `.github/workflows/build-apk.yml` ซึ่งจะทำงานอัตโนมัติเมื่อ Push, Pull Request หรือกดสั่งรันจากแท็บ **Actions** (`workflow_dispatch`):
 
 1. **Debug APK**: รัน Unit Tests (`TradingEnginesUnitTest`) และสร้างไฟล์ `app-debug.apk` อัปโหลดเป็น Artifact ชื่อ `iq-trading-ai-debug-apk` โดยอัตโนมัติ
+   - หาก Repository บน GitHub ไม่มีไฟล์ `app/google-services.json` ให้เพิ่ม Secret ชื่อ `GOOGLE_SERVICES_JSON` (ใส่เนื้อหาจาก `app/google-services.json`) ใน GitHub Repository Settings → Secrets and variables → Actions เพื่อให้ Firebase Auth และ Cloud Firestore ทำงานได้ใน APK
 2. **Signed Release APK (ไม่บังคับ)**: หากต้องการสร้าง Release APK ให้เพิ่ม GitHub Repository Secrets ต่อไปนี้:
    - `RELEASE_KEYSTORE_BASE64`: ไฟล์ Keystore ที่เข้ารหัส Base64
    - `STORE_PASSWORD`: รหัสผ่าน Keystore
