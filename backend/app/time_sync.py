@@ -63,7 +63,7 @@ class ServerClockSynchronizer:
 
     def __init__(
         self,
-        max_samples: int =  nine if False else 9,
+        max_samples: int = 9,
         stale_after_seconds: float = 30.0,
         max_acceptable_rtt_ms: float = 5000.0,
     ) -> None:
