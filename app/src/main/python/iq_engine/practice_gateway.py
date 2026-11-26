@@ -8,6 +8,7 @@ cannot be forcibly killed by Python, so this gateway never retries/reuses it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 import threading
 from typing import Any, Callable
 
@@ -39,17 +40,18 @@ class PracticeReadOnlyGateway:
 
     @property
     def state(self) -> str:
-        return self._state
+        with self._lock:
+            return self._state
 
     def _bounded(self, fn: Callable[[], Any], label: str) -> Any:
         result: list[Any] = []
-        failure: list[BaseException] = []
+        failure: list[Exception] = []
         done = threading.Event()
 
         def run() -> None:
             try:
                 result.append(fn())
-            except BaseException as exc:  # relay worker exception to caller
+            except Exception as exc:
                 failure.append(exc)
             finally:
                 done.set()
@@ -62,48 +64,92 @@ class PracticeReadOnlyGateway:
             raise GatewayError(f"{label} timed out; session is poisoned and cannot be reused")
         if failure:
             raise GatewayError(f"{label} failed: {type(failure[0]).__name__}") from failure[0]
-        return result[0] if result else None
+        if not result:
+            raise GatewayError(f"{label} returned no result")
+        return result[0]
+
+    @staticmethod
+    def _connection_confirmed(result: Any) -> bool:
+        # IQAir's documented wrapper returns (success, reason); accept a bare
+        # True only for compatible test doubles/adapters. None/False is fail-closed.
+        if result is True:
+            return True
+        return isinstance(result, tuple) and len(result) >= 1 and result[0] is True
+
+    def _close_partial_client(self, client: Any) -> None:
+        if self._poisoned:
+            return
+        api = getattr(client, "api", None)
+        close = getattr(api, "close", None)
+        if callable(close):
+            try:
+                self._bounded(close, "cleanup")
+            except GatewayError:
+                # A failed cleanup must never make this gateway reusable.
+                self._poisoned = True
+                self._state = "POISONED"
 
     def connect_readonly(self, email: str, password: str) -> ReadOnlySnapshot:
-        if not email or not password:
+        if not isinstance(email, str) or not email.strip() or not isinstance(password, str) or not password:
             raise GatewayError("Credentials are required.")
         with self._lock:
             if self._poisoned:
                 raise GatewayError("Session is poisoned; create a new gateway after process restart.")
             if self._state != "DISCONNECTED":
                 raise GatewayError("Only one active account session is supported.")
+
             self._state = "CONNECTING"
+            client: Any | None = None
             try:
                 client = self._factory(email, password)
                 connected = self._bounded(client.connect, "connect")
-                if isinstance(connected, tuple) and connected and connected[0] is not True:
-                    raise GatewayError("Broker rejected the connection.")
+                if not self._connection_confirmed(connected):
+                    raise GatewayError("Broker did not explicitly confirm connection success.")
+
                 mode = self._bounded(client.get_balance_mode, "account-mode")
-                if str(mode).upper() != "PRACTICE":
+                if str(mode).strip().upper() != "PRACTICE":
                     raise GatewayError("Broker did not confirm Practice account; access denied.")
+
                 profile = self._bounded(client.get_profile_ansyc, "profile")
                 if not isinstance(profile, dict):
                     raise GatewayError("Broker profile response is malformed.")
                 balances = profile.get("balances")
                 if not isinstance(balances, list):
                     raise GatewayError("Broker profile has no balance list.")
+
                 selected_id = client.get_balance_id()
-                row = next((item for item in balances if str(item.get("id")) == str(selected_id)), None)
-                if row is None or row.get("type") != 4:
+                if selected_id is None or str(selected_id).strip() == "":
+                    raise GatewayError("Broker did not identify the selected account balance.")
+                row = next(
+                    (item for item in balances
+                     if isinstance(item, dict) and str(item.get("id")) == str(selected_id)),
+                    None,
+                )
+                if row is None or type(row.get("type")) is not int or row["type"] != 4:
                     raise GatewayError("Selected balance is not explicitly Practice.")
+                currency = row.get("currency")
+                if not isinstance(currency, str) or not currency.strip():
+                    raise GatewayError("Broker did not provide a valid account currency.")
+
                 amount = self._bounded(client.get_balance, "balance")
-                amount = float(amount)
-                if amount < 0 or amount != amount or amount in (float("inf"), float("-inf")):
+                try:
+                    amount = float(amount)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise GatewayError("Broker returned a non-numeric balance.") from exc
+                if not isfinite(amount) or amount < 0:
                     raise GatewayError("Broker returned an invalid balance.")
+
                 self._client = client
                 self._state = "CONNECTED_READ_ONLY"
                 return ReadOnlySnapshot(
                     account_type="PRACTICE",
                     balance=amount,
-                    currency=str(row.get("currency") or ""),
+                    currency=currency.strip(),
                     account_id=str(selected_id),
                 )
-            except BaseException:
+            except Exception:
+                if client is not None and not self._poisoned:
+                    self._close_partial_client(client)
                 if not self._poisoned:
                     self._state = "ERROR"
                 raise
@@ -121,7 +167,8 @@ class PracticeReadOnlyGateway:
             try:
                 self._bounded(client.api.close, "disconnect")
             finally:
-                self._state = "DISCONNECTED"
+                if not self._poisoned:
+                    self._state = "DISCONNECTED"
 
     def submit_order(self, *_: Any, **__: Any) -> None:
         raise GatewayError("Order submission is disabled in the read-only integration stage.")
