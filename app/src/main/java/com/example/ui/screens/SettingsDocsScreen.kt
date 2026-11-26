@@ -22,10 +22,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
-import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Router
 import androidx.compose.material3.Button
@@ -67,7 +67,6 @@ fun SettingsDocsScreen(
     userProfile: UserProfile?,
     settings: IntegrationSettings,
     backendHealth: BackendHealthState,
-    isSyncingCloud: Boolean,
     onSwitchMode: (ExecutionMode) -> Unit,
     onResetBalance: () -> Unit,
     onSaveIntegrations: (
@@ -85,8 +84,6 @@ fun SettingsDocsScreen(
     onTestBackend: () -> Unit,
     onSendTelegramTest: () -> Unit,
     onSendLocalNotificationTest: () -> Unit,
-    onSyncCloudNow: () -> Unit,
-    onSignOut: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
@@ -353,12 +350,8 @@ fun SettingsDocsScreen(
             }
         }
 
-        // 3. Cloud Backup & Google Account
+        // 3. Local SQL storage status
         item {
-            val lastBackupStr = userProfile?.lastBackupAt?.toDate()?.let {
-                SimpleDateFormat("dd MMM yyyy HH:mm", Locale.getDefault()).format(it)
-            } ?: "ซิงค์อัตโนมัติพร้อมใช้งาน"
-
             Surface(
                 color = tradingColors.surfaceElevated,
                 shape = RoundedCornerShape(16.dp),
@@ -373,57 +366,28 @@ fun SettingsDocsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Rounded.CloudSync, contentDescription = null, tint = tradingColors.cyan)
+                        Icon(Icons.Rounded.Storage, contentDescription = null, tint = tradingColors.bullish)
                         Text(
-                            text = "ระบบสำรองข้อมูล Cloud Firestore & บัญชี",
+                            text = "ฐานข้อมูล SQL ภายในเครื่อง",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     Text(
-                        text = "บัญชี: ${userProfile?.displayName ?: "Trader"} (${userProfile?.email ?: "Google Auth"})",
+                        text = "สถานะ: Local-Only • SQLite / Room",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = tradingColors.bullish
+                    )
+                    Text(
+                        text = "โปรไฟล์ในเครื่อง: ${userProfile?.displayName ?: "Trader"}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "สำรองข้อมูลล่าสุด: $lastBackupStr",
+                        text = "ประวัติการเทรด กลยุทธ์ นโยบายความเสี่ยง และ P&L จัดเก็บในฐานข้อมูลของอุปกรณ์ ไม่มี Firebase หรือ Cloud Sync",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Button(
-                            onClick = onSyncCloudNow,
-                            enabled = !isSyncingCloud,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = tradingColors.cyan,
-                                contentColor = tradingColors.surfaceCanvas
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).height(48.dp).testTag("cloud_backup_now_button")
-                        ) {
-                            if (isSyncingCloud) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    color = tradingColors.surfaceCanvas,
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Text("Backup Now", fontWeight = FontWeight.Bold)
-                            }
-                        }
-                        OutlinedButton(
-                            onClick = onSignOut,
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, tradingColors.bearish.copy(alpha = 0.6f)),
-                            modifier = Modifier.weight(1f).height(48.dp).testTag("sign_out_button")
-                        ) {
-                            Text("ออกจากระบบ", color = tradingColors.bearish)
-                        }
-                    }
                 }
             }
         }
@@ -469,8 +433,8 @@ fun SettingsDocsScreen(
                         body = "1) ค้นหา @BotFather ใน Telegram และสร้างบอทด้วยคำสั่ง /newbot เพื่อรับ Bot Token\n2) ส่งข้อความทักบอทของคุณ จากนั้นนำ Chat ID มาใส่ในหน้านี้\n3) Token จะถูกเข้ารหัสด้วย Android Keystore AES-256-GCM บนเครื่องของคุณเท่านั้น"
                     )
                     DocAccordionItem(
-                        title = "5. การสำรองข้อมูล Cloud และสิทธิ์ผู้ใช้",
-                        body = "กลยุทธ์ นโยบายความเสี่ยง ประวัติการเทรด และสรุปผลรายวันจะถูกซิงค์ไปยัง Cloud Firestore ภายใต้โครงสร้าง /users/{userId}/... ซึ่งล็อกสิทธิ์เฉพาะบัญชี Google ที่ยืนยันตัวตนเท่านั้น"
+                        title = "5. ฐานข้อมูล SQL ภายในเครื่อง",
+                        body = "กลยุทธ์ นโยบายความเสี่ยง ประวัติการเทรด และสรุปผลรายวันจัดเก็บใน SQLite ผ่าน Room บนอุปกรณ์นี้ โดยไม่ใช้ Firebase, Firestore หรือ Cloud Sync ส่วน Python FastAPI ใช้เฉพาะงาน AI และเชื่อมต่อโบรกเกอร์ตามการตั้งค่าของผู้ใช้"
                     )
                 }
             }
