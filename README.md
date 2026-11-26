@@ -11,7 +11,7 @@
 - **Independent Risk Management Engine**: ด่านตรวจสอบความเสี่ยงอิสระก่อนส่งคำสั่งทุกครั้ง (Max Trade Amount, Max Daily Loss, Max Consecutive Losses, Max Daily Trades, Max Portfolio Exposure, Loss Cooldown และปุ่ม **KILL STOP** ฉุกเฉิน)
 - **Daily P&L Dashboard & Trade Journal**: สรุปกำไร/ขาดทุนรายวัน, Win Rate, Max Drawdown, กราฟแท่ง 7 วัน และประวัติออเดอร์พร้อมคำอธิบายสัญญาณ
 - **Telegram Bot Alerts**: แจ้งเตือนสัญญาณ ผลคำสั่งซื้อขาย และการตัดขาดทุนเข้า Telegram แบบเรียลไทม์
-- **Cloud Backup & Auth**: ยืนยันตัวตนด้วย **Google Sign-In (Jetpack Credential Manager)** และสำรองกลยุทธ์ นโยบายความเสี่ยง ประวัติเทรด และสรุปผลรายวันขึ้น **Cloud Firestore** แยกสิทธิ์เฉพาะเจ้าของบัญชี
+- **Local-Only SQL Storage**: ใช้ **SQLite ผ่าน Android Room** จัดเก็บโปรไฟล์ กลยุทธ์ Risk Policy ประวัติเทรด และ Daily P&L ภายในเครื่อง ไม่มี Firebase Authentication, Firestore, Google Sign-In หรือ Cloud Sync
 - **Hardware-Backed Security**: เข้ารหัส Telegram Bot Token และ FastAPI Bearer Token ด้วย **Android Keystore (AES-256-GCM)** โดยไม่เก็บรหัสผ่านโบรกเกอร์บนอุปกรณ์ และล็อกโหมด **LIVE** จนกว่า Backend Connector จะผ่านการตรวจสอบ
 
 ---
@@ -21,7 +21,7 @@
 โปรเจกต์นี้มี Workflow ที่ `.github/workflows/build-apk.yml` ซึ่งจะทำงานอัตโนมัติเมื่อ Push, Pull Request หรือกดสั่งรันจากแท็บ **Actions** (`workflow_dispatch`):
 
 1. **Debug APK**: รัน Unit Tests (`TradingEnginesUnitTest`) และสร้างไฟล์ `app-debug.apk` อัปโหลดเป็น Artifact ชื่อ `iq-trading-ai-debug-apk` โดยอัตโนมัติ
-   - หาก Repository บน GitHub ไม่มีไฟล์ `app/google-services.json` ให้เพิ่ม Secret ชื่อ `GOOGLE_SERVICES_JSON` (ใส่เนื้อหาจาก `app/google-services.json`) ใน GitHub Repository Settings → Secrets and variables → Actions เพื่อให้ Firebase Auth และ Cloud Firestore ทำงานได้ใน APK
+   - ไม่ต้องใช้ `google-services.json`, Firebase SDK หรือ Secret สำหรับ Google Sign-In/Firestore; ข้อมูลแอปจัดเก็บใน SQLite ภายในเครื่อง
 2. **Signed Release APK (ไม่บังคับ)**: หากต้องการสร้าง Release APK ให้เพิ่ม GitHub Repository Secrets ต่อไปนี้:
    - `RELEASE_KEYSTORE_BASE64`: ไฟล์ Keystore ที่เข้ารหัส Base64
    - `STORE_PASSWORD`: รหัสผ่าน Keystore
