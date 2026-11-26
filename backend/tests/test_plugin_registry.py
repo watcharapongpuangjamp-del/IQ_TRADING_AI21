@@ -10,24 +10,28 @@ from app.plugins import (
 
 
 def manifest(plugin_id="broker.iqoption.community", *, builtin=False):
-    return PluginManifest(
-        plugin_id=plugin_id,
-        version="1.0.0",
-        display_name="Test adapter",
-        capabilities=("market.data", "order.submit"),
-        builtin=builtin,
-    )
+    return PluginManifest(plugin_id, "1.0.0", "Test adapter", ("market.data", "order.submit"), builtin=builtin)
 
 
-def test_custom_plugin_lifecycle_register_enable_disable_remove():
+def test_custom_plugin_lifecycle_register_validate_enable_disable_remove():
     registry = PluginRegistry()
-    registered = registry.register(manifest())
-    assert registered.state is PluginState.REGISTERED
+    assert registry.register(manifest()).state is PluginState.REGISTERED
+    with pytest.raises(PluginRegistryError):
+        registry.enable("broker.iqoption.community")
+    assert registry.mark_validated("broker.iqoption.community").state is PluginState.VALIDATED
     assert registry.enable("broker.iqoption.community").state is PluginState.ENABLED
     assert registry.disable("broker.iqoption.community").state is PluginState.DISABLED
     registry.remove("broker.iqoption.community")
     with pytest.raises(PluginRegistryError):
         registry.get("broker.iqoption.community")
+
+
+def test_validation_failure_blocks_activation():
+    registry = PluginRegistry()
+    registry.register(manifest())
+    registry.mark_validation_failed("broker.iqoption.community")
+    with pytest.raises(PluginRegistryError):
+        registry.enable("broker.iqoption.community")
 
 
 def test_builtin_plugin_is_enabled_and_immutable():
@@ -40,17 +44,15 @@ def test_builtin_plugin_is_enabled_and_immutable():
 
 
 def test_default_factory_always_provides_simulation():
-    registry = create_default_plugin_registry()
-    item = registry.get("core.simulation")
+    item = create_default_plugin_registry().get("core.simulation")
     assert item.manifest.builtin is True
     assert item.state is PluginState.ENABLED
     assert "order.submit.simulation" in item.manifest.capabilities
 
 
 def test_custom_plugin_cannot_claim_builtin_status():
-    registry = PluginRegistry()
     with pytest.raises(PluginRegistryError):
-        registry.register(manifest(builtin=True))
+        PluginRegistry().register(manifest(builtin=True))
 
 
 def test_duplicate_plugin_is_rejected():
