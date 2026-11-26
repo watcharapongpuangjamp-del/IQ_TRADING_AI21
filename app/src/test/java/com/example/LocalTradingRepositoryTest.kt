@@ -2,6 +2,8 @@ package com.example
 
 import android.content.Context
 import androidx.room.Room
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.TradingDatabase
 import com.example.data.repository.LocalTradingRepository
@@ -109,4 +111,84 @@ class LocalTradingRepositoryTest {
             database.close()
         }
     }
+    @Test
+    fun `migration 4 to 5 preserves trade rows and removes legacy cloud marker`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val databaseName = "local_only_migration_test.db"
+        context.deleteDatabase(databaseName)
+
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(databaseName)
+                .callback(object : SupportSQLiteOpenHelper.Callback(4) {
+                    override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL(
+                            """
+                            CREATE TABLE local_trade_logs (
+                                tradeId TEXT NOT NULL PRIMARY KEY,
+                                userId TEXT NOT NULL,
+                                instrument TEXT NOT NULL,
+                                timeframe TEXT NOT NULL,
+                                direction TEXT NOT NULL,
+                                mode TEXT NOT NULL,
+                                amount REAL NOT NULL,
+                                payoutRate REAL NOT NULL,
+                                entryPrice REAL NOT NULL,
+                                exitPrice REAL NOT NULL,
+                                status TEXT NOT NULL,
+                                pnl REAL NOT NULL,
+                                strategyName TEXT NOT NULL,
+                                marketRegime TEXT NOT NULL,
+                                confidenceScore INTEGER NOT NULL,
+                                calibratedProbability REAL NOT NULL,
+                                explanation TEXT NOT NULL,
+                                createdAtMillis INTEGER NOT NULL,
+                                syncedToCloud INTEGER NOT NULL
+                            )
+                            """.trimIndent()
+                        )
+                        db.execSQL(
+                            """
+                            INSERT INTO local_trade_logs VALUES (
+                                'legacy_trade_001', 'local-user', 'EUR/USD', '1m', 'CALL',
+                                'SIMULATION', 10.0, 0.85, 1.085, 1.086, 'WON', 8.5,
+                                'EMA-RSI', 'TRENDING_UP', 75, 0.72, 'legacy local row',
+                                1700000000000, 1
+                            )
+                            """.trimIndent()
+                        )
+                    }
+
+                    override fun onUpgrade(
+                        db: androidx.sqlite.db.SupportSQLiteDatabase,
+                        oldVersion: Int,
+                        newVersion: Int
+                    ) = Unit
+                })
+                .build()
+        )
+
+        try {
+            val db = helper.writableDatabase
+            TradingDatabase.MIGRATION_4_5.migrate(db)
+
+            db.query("SELECT tradeId, amount, status FROM local_trade_logs").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("legacy_trade_001", cursor.getString(cursor.getColumnIndexOrThrow("tradeId")))
+                assertEquals(10.0, cursor.getDouble(cursor.getColumnIndexOrThrow("amount")), 0.0)
+                assertEquals("WON", cursor.getString(cursor.getColumnIndexOrThrow("status")))
+            }
+
+            val columns = mutableSetOf<String>()
+            db.query("PRAGMA table_info(local_trade_logs)").use { cursor ->
+                val nameIndex = cursor.getColumnIndexOrThrow("name")
+                while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            }
+            assertFalse(columns.contains("syncedToCloud"))
+        } finally {
+            helper.close()
+            context.deleteDatabase(databaseName)
+        }
+    }
+
 }
