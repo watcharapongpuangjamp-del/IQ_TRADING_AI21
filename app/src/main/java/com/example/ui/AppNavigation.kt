@@ -261,10 +261,11 @@ private fun AuthenticatedTradingShell(
                 }
                 val databaseId = app.getString(R.string.firestore_database_id)
                 val db = FirebaseFirestore.getInstance(databaseId)
+                val vault = SecureCredentialVault(app)
                 TradingViewModel(
-                    cloudRepository = TradingCloudRepository(db),
+                    cloudRepository = TradingCloudRepository(db, cloudSyncEnabled = vault::isCloudSyncEnabled),
                     tradingDao = TradingDatabase.getInstance(app).tradingDao(),
-                    credentialVault = SecureCredentialVault(app),
+                    credentialVault = vault,
                     telegramNotifier = TelegramNotifier(),
                     backendClient = BackendConnectorClient(),
                     notificationHelper = TradingNotificationHelper(app),
