@@ -77,6 +77,8 @@ import java.util.Locale
 
 @Composable
 fun SettingsDocsScreen(
+    selectedAccountType: AccountType = AccountType.PRACTICE,
+    onSelectAccountType: (AccountType) -> Unit = {},
     userProfile: UserProfile?,
     databaseStats: LocalDatabaseStats,
     settings: IntegrationSettings,
@@ -110,7 +112,6 @@ fun SettingsDocsScreen(
     val context = LocalContext.current
     val currentMode = ExecutionMode.safeValueOf(userProfile?.executionMode)
     var selectedTab by remember { mutableIntStateOf(0) }
-    var selectedAccountType by rememberSaveable { mutableStateOf(AccountType.PRACTICE) }
     var accountTypeMenuExpanded by remember { mutableStateOf(false) }
     var traderNameInput by remember(userProfile?.displayName) {
         mutableStateOf(userProfile?.displayName ?: "Local Trader")
@@ -228,7 +229,7 @@ fun SettingsDocsScreen(
                             DropdownMenuItem(
                                 text = { Text("Practice Account") },
                                 onClick = {
-                                    selectedAccountType = AccountType.PRACTICE
+                                    onSelectAccountType(AccountType.PRACTICE)
                                     accountTypeMenuExpanded = false
                                 },
                                 modifier = Modifier.testTag("account_type_practice")
@@ -236,7 +237,7 @@ fun SettingsDocsScreen(
                             DropdownMenuItem(
                                 text = { Text("Real Account (ต้องยืนยันและผ่านการอนุญาต)") },
                                 onClick = {
-                                    selectedAccountType = AccountType.REAL
+                                    onSelectAccountType(AccountType.REAL)
                                     accountTypeMenuExpanded = false
                                 },
                                 modifier = Modifier.testTag("account_type_real")
