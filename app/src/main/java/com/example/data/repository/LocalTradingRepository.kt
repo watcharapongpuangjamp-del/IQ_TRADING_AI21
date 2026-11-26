@@ -35,7 +35,14 @@ class LocalTradingRepository(private val dao: TradingDao) {
         if (dao.getRiskPolicy() == null) {
             dao.upsertRiskPolicy(RiskPolicy().toLocal())
         }
+        if (dao.getStrategy("default_ema_rsi") == null) {
+            dao.upsertStrategy(StrategyConfig(id = "default_ema_rsi", userId = LOCAL_USER_ID).toLocal())
+        }
     }
+
+    suspend fun ensureUserBootstrap(userId: String, displayName: String, email: String?): Result<Unit> = runCatching { ensureLocalProfile(displayName) }
+
+    fun observeUserProfile(userId: String): Flow<UserProfile?> = observeUserProfile()
 
     fun observeUserProfile(): Flow<UserProfile?> = dao.observeUserProfile().map { row ->
         row?.let { UserProfile(
@@ -46,6 +53,8 @@ class LocalTradingRepository(private val dao: TradingDao) {
 
     fun observeStrategies(userId: String): Flow<List<StrategyConfig>> =
         dao.observeStrategies(userId).map { rows -> rows.map { it.toModel() } }
+
+    fun observeRiskPolicy(userId: String): Flow<RiskPolicy?> = observeRiskPolicy()
 
     fun observeRiskPolicy(): Flow<RiskPolicy?> = dao.observeRiskPolicy().map { it?.toModel() }
 
