@@ -20,7 +20,7 @@
 
 โปรเจกต์นี้มี Workflow ที่ `.github/workflows/build-apk.yml` ซึ่งจะทำงานอัตโนมัติเมื่อ Push, Pull Request หรือกดสั่งรันจากแท็บ **Actions** (`workflow_dispatch`):
 
-1. **Debug APK**: รัน Unit Tests (`TradingEnginesUnitTest`) และสร้างไฟล์ `app-debug.apk` อัปโหลดเป็น Artifact ชื่อ `iq-trading-ai-debug-apk` โดยอัตโนมัติ
+1. **Debug APK**: รัน Unit Tests (`TradingEnginesUnitTest`) และสร้างไฟล์ `app-debug.apk` อัปโหลดเป็น Artifact ชื่อ `iq-trading-ai-debug-apk` โดยอัตโนมัติ โดย Debug build ใช้ package suffix `.localtest` เพื่อให้ติดตั้งทดสอบคู่กับแอปเดิมได้โดยไม่ต้องถอนแอปเดิม
    - ไม่ต้องใช้ `google-services.json`, Firebase SDK หรือ Secret สำหรับ Google Sign-In/Firestore; ข้อมูลแอปจัดเก็บใน SQLite ภายในเครื่อง
 2. **Signed Release APK (ไม่บังคับ)**: หากต้องการสร้าง Release APK ให้เพิ่ม GitHub Repository Secrets ต่อไปนี้:
    - `RELEASE_KEYSTORE_BASE64`: ไฟล์ Keystore ที่เข้ารหัส Base64
