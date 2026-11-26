@@ -526,6 +526,7 @@ data class IntegrationSettings(
     val notifyOnRiskStop: Boolean = true,
     val notifyDailySummary: Boolean = true,
     val enableLocalNotifications: Boolean = true,
+    val cloudSyncEnabled: Boolean = false,
     val hasBackendToken: Boolean = false,
     val hasTelegramToken: Boolean = false
 )
