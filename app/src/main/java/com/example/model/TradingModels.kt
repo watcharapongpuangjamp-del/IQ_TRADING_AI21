@@ -1,10 +1,6 @@
 package com.example.model
 
 import androidx.annotation.Keep
-import com.google.firebase.Timestamp
-import com.google.firebase.firestore.DocumentId
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.IgnoreExtraProperties
 
 enum class ExecutionMode(val label: String) {
     SIMULATION("SIMULATION"),
@@ -95,28 +91,15 @@ enum class MarketRegime(val labelTh: String) {
 }
 
 @Keep
-@IgnoreExtraProperties
 data class UserProfile(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val displayName: String = "Trader",
     val email: String? = null,
     val executionMode: String = ExecutionMode.SIMULATION.name,
     val simulationBalance: Double = 10000.0,
-    val lastBackupAt: Timestamp? = null,
-    val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null
 ) {
-    fun toCreateMap(uid: String): Map<String, Any> = buildMap {
-        put("userId", uid)
-        put("displayName", displayName.take(100).ifBlank { "Trader" })
-        if (!email.isNullOrBlank()) put("email", email.take(150))
-        put("executionMode", ExecutionMode.safeValueOf(executionMode).name)
-        put("simulationBalance", simulationBalance.coerceIn(0.0, 10_000_000.0))
-        put("lastBackupAt", FieldValue.serverTimestamp())
-        put("createdAt", FieldValue.serverTimestamp())
-        put("updatedAt", FieldValue.serverTimestamp())
-    }
 }
 
 @Keep
@@ -141,12 +124,9 @@ data class StrategyConfig(
     val bbStdDev: Double = 2.0,
     val minConfidence: Int = 65,
     val active: Boolean = true,
-    val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null
 ) {
-    fun toCreateMap(uid: String): Map<String, Any> = mapOf(
-        "userId" to uid,
-        "name" to name.trim().take(80).ifBlank { "Custom Strategy" },
+,
         "instrument" to instrument.trim().take(20).ifBlank { "EUR/USD" },
         "timeframe" to Timeframe.fromCode(timeframe).code,
         "tradeAmount" to tradeAmount.coerceIn(1.0, 100_000.0),
@@ -167,8 +147,7 @@ data class StrategyConfig(
         "updatedAt" to FieldValue.serverTimestamp()
     )
 
-    fun toUpdateMap(): Map<String, Any> = mapOf(
-        "name" to name.trim().take(80).ifBlank { "Custom Strategy" },
+,
         "instrument" to instrument.trim().take(20).ifBlank { "EUR/USD" },
         "timeframe" to Timeframe.fromCode(timeframe).code,
         "tradeAmount" to tradeAmount.coerceIn(1.0, 100_000.0),
@@ -202,79 +181,8 @@ data class RiskPolicy(
     val cooldownMinutes: Int = 15,
     val emergencyStopped: Boolean = false,
     val autoTradeEnabled: Boolean = false,
-    val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null
 ) {
-    fun toCreateMap(uid: String): Map<String, Any> = mapOf(
-        "userId" to uid,
-        "maxTradeAmount" to maxTradeAmount.coerceIn(1.0, 100_000.0),
-        "maxDailyLoss" to maxDailyLoss.coerceIn(1.0, 1_000_000.0),
-        "maxConsecutiveLosses" to maxConsecutiveLosses.coerceIn(1, 20),
-        "maxDailyTrades" to maxDailyTrades.coerceIn(1, 500),
-        "maxPortfolioExposure" to maxPortfolioExposure.coerceIn(1.0, 1_000_000.0),
-        "cooldownMinutes" to cooldownMinutes.coerceIn(0, 1440),
-        "emergencyStopped" to emergencyStopped,
-        "autoTradeEnabled" to autoTradeEnabled,
-        "createdAt" to FieldValue.serverTimestamp(),
-        "updatedAt" to FieldValue.serverTimestamp()
-    )
-
-    fun toUpdateMap(): Map<String, Any> = mapOf(
-        "maxTradeAmount" to maxTradeAmount.coerceIn(1.0, 100_000.0),
-        "maxDailyLoss" to maxDailyLoss.coerceIn(1.0, 1_000_000.0),
-        "maxConsecutiveLosses" to maxConsecutiveLosses.coerceIn(1, 20),
-        "maxDailyTrades" to maxDailyTrades.coerceIn(1, 500),
-        "maxPortfolioExposure" to maxPortfolioExposure.coerceIn(1.0, 1_000_000.0),
-        "cooldownMinutes" to cooldownMinutes.coerceIn(0, 1440),
-        "emergencyStopped" to emergencyStopped,
-        "autoTradeEnabled" to autoTradeEnabled,
-        "updatedAt" to FieldValue.serverTimestamp()
-    )
-}
-
-@Keep
-@IgnoreExtraProperties
-data class TradeRecord(
-    @DocumentId val id: String = "",
-    val userId: String = "",
-    val instrument: String = "EUR/USD",
-    val timeframe: String = "1m",
-    val direction: String = TradeDirection.CALL.name,
-    val mode: String = ExecutionMode.SIMULATION.name,
-    val amount: Double = 25.0,
-    val payoutRate: Double = 0.85,
-    val entryPrice: Double = 1.0,
-    val exitPrice: Double = 0.0,
-    val status: String = TradeStatus.OPEN.name,
-    val pnl: Double = 0.0,
-    val strategyName: String = "EMA-RSI Momentum",
-    val confidenceScore: Int = 70,
-    val calibratedProbability: Double = 0.62,
-    val explanation: String = "",
-    val createdAt: Timestamp? = null,
-    val updatedAt: Timestamp? = null
-) {
-    fun toCreateMap(uid: String): Map<String, Any> = mapOf(
-        "userId" to uid,
-        "instrument" to instrument.trim().take(20).ifBlank { "EUR/USD" },
-        "timeframe" to Timeframe.fromCode(timeframe).code,
-        "direction" to if (direction == TradeDirection.PUT.name) "PUT" else "CALL",
-        "mode" to ExecutionMode.safeValueOf(mode).name,
-        "amount" to amount.coerceIn(1.0, 100_000.0),
-        "payoutRate" to payoutRate.coerceIn(0.1, 2.0),
-        "entryPrice" to entryPrice.coerceAtLeast(0.00001),
-        "exitPrice" to exitPrice.coerceAtLeast(0.0),
-        "status" to TradeStatus.safeValueOf(status).name,
-        "pnl" to pnl.coerceIn(-100_000.0, 200_000.0),
-        "strategyName" to strategyName.trim().take(80).ifBlank { "Strategy" },
-        "confidenceScore" to confidenceScore.coerceIn(0, 100),
-        "calibratedProbability" to calibratedProbability.coerceIn(0.0, 1.0),
-        "explanation" to explanation.take(500),
-        "createdAt" to FieldValue.serverTimestamp(),
-        "updatedAt" to FieldValue.serverTimestamp()
-    )
-}
-
 @Keep
 @IgnoreExtraProperties
 data class DailyPnLSummary(
@@ -287,108 +195,10 @@ data class DailyPnLSummary(
     val netPnl: Double = 0.0,
     val consecutiveLosses: Int = 0,
     val peakDrawdown: Double = 0.0,
-    val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null
 ) {
     val winRate: Double
         get() = if (totalTrades > 0) (wins.toDouble() / totalTrades.toDouble()) * 100.0 else 0.0
-
-    fun toCreateMap(uid: String, resolvedDateKey: String): Map<String, Any> = mapOf(
-        "userId" to uid,
-        "dateKey" to resolvedDateKey,
-        "totalTrades" to totalTrades.coerceIn(0, 10_000),
-        "wins" to wins.coerceIn(0, 10_000),
-        "losses" to losses.coerceIn(0, 10_000),
-        "netPnl" to netPnl.coerceIn(-10_000_000.0, 10_000_000.0),
-        "consecutiveLosses" to consecutiveLosses.coerceIn(0, 100),
-        "peakDrawdown" to peakDrawdown.coerceIn(0.0, 10_000_000.0),
-        "createdAt" to FieldValue.serverTimestamp(),
-        "updatedAt" to FieldValue.serverTimestamp()
-    )
-
-    fun toUpdateMap(): Map<String, Any> = mapOf(
-        "totalTrades" to totalTrades.coerceIn(0, 10_000),
-        "wins" to wins.coerceIn(0, 10_000),
-        "losses" to losses.coerceIn(0, 10_000),
-        "netPnl" to netPnl.coerceIn(-10_000_000.0, 10_000_000.0),
-        "consecutiveLosses" to consecutiveLosses.coerceIn(0, 100),
-        "peakDrawdown" to peakDrawdown.coerceIn(0.0, 10_000_000.0),
-        "updatedAt" to FieldValue.serverTimestamp()
-    )
-}
-
-data class Candle(
-    val timestampMillis: Long,
-    val open: Double,
-    val high: Double,
-    val low: Double,
-    val close: Double,
-    val volume: Double = 0.0
-)
-
-data class TechnicalSnapshot(
-    val rsi: Double,
-    val macdLine: Double,
-    val macdSignal: Double,
-    val macdHistogram: Double,
-    val emaFast: Double,
-    val emaSlow: Double,
-    val bbUpper: Double,
-    val bbMiddle: Double,
-    val bbLower: Double,
-    val atr: Double,
-    val volatilityPct: Double,
-    val trendStrength: Double,
-    val supportLevel: Double,
-    val resistanceLevel: Double,
-    val candlestickPattern: String,
-    val regime: MarketRegime,
-    val emaFastSeries: List<Double> = emptyList(),
-    val emaSlowSeries: List<Double> = emptyList(),
-    val bbUpperSeries: List<Double> = emptyList(),
-    val bbLowerSeries: List<Double> = emptyList(),
-    val rsiSeries: List<Double> = emptyList(),
-    val macdHistSeries: List<Double> = emptyList(),
-    val adx: Double = 0.0,
-    val plusDi: Double = 0.0,
-    val minusDi: Double = 0.0,
-    val stochasticK: Double = 50.0,
-    val stochasticD: Double = 50.0,
-    val vwap: Double = 0.0,
-    val vwapReliable: Boolean = false
-)
-
-data class SignalAnalysis(
-    val instrument: String,
-    val timeframe: String,
-    val direction: TradeDirection,
-    val calibratedProbability: Double,
-    val confidenceScore: Int,
-    val supportingEvidence: List<String>,
-    val contradictingEvidence: List<String>,
-    val regime: MarketRegime,
-    val riskAssessment: String,
-    val explanation: String,
-    val expiresAtMillis: Long,
-    val sourceLabel: String = "Local Heuristic"
-)
-
-enum class AlignmentState(val labelTh: String) {
-    ALIGNED_BULLISH("ทุกกรอบเวลาหนุนขาขึ้น"),
-    ALIGNED_BEARISH("ทุกกรอบเวลาหนุนขาลง"),
-    MIXED("กรอบเวลายังผสม / รอยืนยัน"),
-    CONFLICTING("สัญญาณข้ามกรอบเวลาขัดแย้ง");
-
-    companion object {
-        fun safeValueOf(raw: String?): AlignmentState = when (raw?.uppercase()) {
-            "ALIGNED_BULLISH" -> ALIGNED_BULLISH
-            "ALIGNED_BEARISH" -> ALIGNED_BEARISH
-            "CONFLICTING", "CONFLICT" -> CONFLICTING
-            "MIXED", "NEUTRAL" -> MIXED
-            else -> MIXED
-        }
-    }
-}
 
 enum class StreamTransportMode(val label: String) {
     LOCAL_SIMULATION("Built-in Sim"),
@@ -513,7 +323,7 @@ enum class ExecutionStage(val stepNumber: Int, val titleTh: String) {
     EXECUTION_AUTH(7, "ยืนยันสิทธิ์ส่งคำสั่ง"),
     ORDER_SUBMISSION(8, "ส่งคำสั่งซื้อขาย"),
     RESULT_VERIFICATION(9, "รอผลปิดออเดอร์"),
-    TRADE_LOGGING(10, "บันทึกประวัติและซิงค์คลาวด์"),
+    TRADE_LOGGING(10, "บันทึกประวัติลงฐานข้อมูลในเครื่อง"),
     PERFORMANCE_EVAL(11, "ประเมินผลและแจ้งเตือน")
 }
 
