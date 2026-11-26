@@ -1,6 +1,12 @@
 import pytest
 
-from app.plugins import PluginManifest, PluginRegistry, PluginRegistryError, PluginState
+from app.plugins import (
+    PluginManifest,
+    PluginRegistry,
+    PluginRegistryError,
+    PluginState,
+    create_default_plugin_registry,
+)
 
 
 def manifest(plugin_id="broker.iqoption.community", *, builtin=False):
@@ -31,6 +37,14 @@ def test_builtin_plugin_is_enabled_and_immutable():
         registry.disable("core.simulation")
     with pytest.raises(PluginRegistryError):
         registry.remove("core.simulation")
+
+
+def test_default_factory_always_provides_simulation():
+    registry = create_default_plugin_registry()
+    item = registry.get("core.simulation")
+    assert item.manifest.builtin is True
+    assert item.state is PluginState.ENABLED
+    assert "order.submit.simulation" in item.manifest.capabilities
 
 
 def test_custom_plugin_cannot_claim_builtin_status():
