@@ -163,6 +163,7 @@ private fun LocalTradingShell(
     val tradesState by viewModel.tradesState.collectAsStateWithLifecycle()
     val dailySummariesState by viewModel.dailySummariesState.collectAsStateWithLifecycle()
     val integrationSettings by viewModel.integrationSettings.collectAsStateWithLifecycle()
+    val selectedAccountType by viewModel.selectedAccountType.collectAsStateWithLifecycle()
     val backendHealth by viewModel.backendHealth.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
     val mlModels by viewModel.mlModels.collectAsStateWithLifecycle()
@@ -366,6 +367,8 @@ private fun LocalTradingShell(
                         }
                         composable(NavRoutes.SETTINGS_DOCS) {
                             SettingsDocsScreen(
+                                selectedAccountType = selectedAccountType,
+                                onSelectAccountType = viewModel::selectAccountType,
                                 userProfile = userProfile,
                                 databaseStats = databaseStats,
                                 settings = integrationSettings,
