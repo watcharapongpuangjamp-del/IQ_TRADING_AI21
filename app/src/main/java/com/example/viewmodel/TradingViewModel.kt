@@ -49,7 +49,6 @@ import com.example.model.UserProfile
 import com.example.model.WebSocketConnectionState
 import com.example.security.SecureCredentialVault
 import com.example.ui.notifications.TradingNotificationHelper
-import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -123,9 +122,6 @@ class TradingViewModel(
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
 
-    private val _isSyncingCloud = MutableStateFlow(false)
-    val isSyncingCloud: StateFlow<Boolean> = _isSyncingCloud.asStateFlow()
-
     private val _mlModels = MutableStateFlow<List<MlModelSummary>>(emptyList())
     val mlModels: StateFlow<List<MlModelSummary>> = _mlModels.asStateFlow()
 
@@ -147,7 +143,7 @@ class TradingViewModel(
     val profileState: StateFlow<CloudUiState<UserProfile?>> =
         localRepository.observeUserProfile(currentUserId)
             .map<UserProfile?, CloudUiState<UserProfile?>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapFirestoreError(it, "โหลดข้อมูลโปรไฟล์ไม่สำเร็จ"))) }
+            .catch { emit(CloudUiState.Error(unwrapDataError(it, "โหลดข้อมูลโปรไฟล์ไม่สำเร็จ"))) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
 
     val strategiesState: StateFlow<CloudUiState<List<StrategyConfig>>> =
@@ -1439,16 +1435,6 @@ class TradingViewModel(
             "ส่งการแจ้งเตือน Local Notification ทดสอบแล้ว"
         } else {
             "กรุณาอนุญาตสิทธิ์ Notification บนอุปกรณ์ก่อนทดสอบ"
-        }
-    }
-
-    fun syncCloudBackupNow() {
-        viewModelScope.launch {
-            _isSyncingCloud.value = true
-            localRepository.updateUserBalanceAndMode(currentBalance(), currentExecutionMode(), markBackupTimestamp = true)
-                .onSuccess { _snackbarMessage.value = "สำรองข้อมูลกลยุทธ์และประวัติขึ้น Cloud Firestore สำเร็จ" }
-                .onFailure { _snackbarMessage.value = "สำรองข้อมูลไม่สำเร็จ: ${it.localizedMessage}" }
-            _isSyncingCloud.value = false
         }
     }
 
