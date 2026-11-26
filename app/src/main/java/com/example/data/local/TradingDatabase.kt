@@ -48,7 +48,6 @@ data class LocalTradeCacheEntity(
     val calibratedProbability: Double,
     val explanation: String,
     val createdAtMillis: Long,
-    val syncedToCloud: Boolean = true
 )
 
 @Entity(tableName = "local_user_profiles")
@@ -210,7 +209,7 @@ interface TradingDao {
         LocalRiskPolicyEntity::class,
         LocalDailySummaryEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class TradingDatabase : RoomDatabase() {
@@ -346,6 +345,55 @@ abstract class TradingDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Remove the obsolete cloud-sync marker while preserving every trade record.
+                db.execSQL(
+                    """
+                    CREATE TABLE `local_trade_logs_new` (
+                        `tradeId` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `instrument` TEXT NOT NULL,
+                        `timeframe` TEXT NOT NULL,
+                        `direction` TEXT NOT NULL,
+                        `mode` TEXT NOT NULL,
+                        `amount` REAL NOT NULL,
+                        `payoutRate` REAL NOT NULL,
+                        `entryPrice` REAL NOT NULL,
+                        `exitPrice` REAL NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `pnl` REAL NOT NULL,
+                        `strategyName` TEXT NOT NULL,
+                        `marketRegime` TEXT NOT NULL,
+                        `confidenceScore` INTEGER NOT NULL,
+                        `calibratedProbability` REAL NOT NULL,
+                        `explanation` TEXT NOT NULL,
+                        `createdAtMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`tradeId`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `local_trade_logs_new` (
+                        tradeId, userId, instrument, timeframe, direction, mode, amount,
+                        payoutRate, entryPrice, exitPrice, status, pnl, strategyName,
+                        marketRegime, confidenceScore, calibratedProbability, explanation,
+                        createdAtMillis
+                    )
+                    SELECT
+                        tradeId, userId, instrument, timeframe, direction, mode, amount,
+                        payoutRate, entryPrice, exitPrice, status, pnl, strategyName,
+                        marketRegime, confidenceScore, calibratedProbability, explanation,
+                        createdAtMillis
+                    FROM local_trade_logs
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE local_trade_logs")
+                db.execSQL("ALTER TABLE local_trade_logs_new RENAME TO local_trade_logs")
+            }
+        }
+
         @Volatile
         private var INSTANCE: TradingDatabase? = null
 
@@ -356,7 +404,7 @@ abstract class TradingDatabase : RoomDatabase() {
                     TradingDatabase::class.java,
                     DATABASE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .also { INSTANCE = it }
             }

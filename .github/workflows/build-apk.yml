@@ -62,20 +62,18 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: Restore google-services.json from secret if absent
-        env:
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+      - name: Verify Local-Only runtime dependencies
         run: |
-          if [ ! -f app/google-services.json ] && [ -n "$GOOGLE_SERVICES_JSON" ]; then
-            printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
-          fi
-          if [ ! -f app/google-services.json ]; then
-            echo "::warning::app/google-services.json not found and GOOGLE_SERVICES_JSON secret is empty. Firebase Auth/Firestore will display the setup notice until GOOGLE_SERVICES_JSON is configured."
+          gradle :app:dependencies --configuration debugRuntimeClasspath > runtime-dependencies.txt
+          if grep -Eiq 'com\.google\.firebase|androidx\.credentials|com\.google\.android\.libraries\.identity\.googleid' runtime-dependencies.txt; then
+            cat runtime-dependencies.txt
+            echo "Unexpected Firebase or Google Sign-In runtime dependency detected."
+            exit 1
           fi
 
       - name: Run Quantitative & Risk Engine Unit Tests
         if: ${{ inputs.run_tests != 'false' }}
-        run: gradle :app:testDebugUnitTest --tests "com.example.TradingEnginesUnitTest"
+        run: gradle :app:testDebugUnitTest
 
       - name: Build Debug APK
         run: gradle :app:assembleDebug

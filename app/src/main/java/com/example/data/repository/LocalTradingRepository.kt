@@ -192,7 +192,6 @@ class LocalTradingRepository(
                 calibratedProbability = trade.calibratedProbability.coerceIn(0.0, 1.0),
                 explanation = trade.explanation.take(500),
                 createdAtMillis = if (trade.createdAtMillis > 0L) trade.createdAtMillis else now,
-                syncedToCloud = true
             )
         )
         tradeId
