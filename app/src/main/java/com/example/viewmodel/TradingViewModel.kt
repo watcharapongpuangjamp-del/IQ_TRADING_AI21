@@ -115,7 +115,7 @@ class TradingViewModel(
 ) : ViewModel() {
 
     private val simEngine = MarketSimulationEngine()
-    private val syncQueueManager = OfflineSyncQueueManager(tradingDao, cloudRepository)
+    private val syncQueueManager = OfflineSyncQueueManager(tradingDao, cloudRepository, credentialVault::isCloudSyncEnabled)
     private val _terminalState = MutableStateFlow(TerminalUiState())
     val terminalState: StateFlow<TerminalUiState> = _terminalState.asStateFlow()
 
@@ -183,9 +183,11 @@ class TradingViewModel(
 
     init {
         viewModelScope.launch {
-            cloudRepository.ensureUserBootstrap(currentUserId, userDisplayName, userEmail)
-                .onFailure { _snackbarMessage.value = "ซิงค์เริ่มต้นไม่สำเร็จ: ${it.localizedMessage}" }
-            flushOfflineSyncQueue(forceRetryFailed = false, notifyUser = false)
+            if (credentialVault.isCloudSyncEnabled()) {
+                cloudRepository.ensureUserBootstrap(currentUserId, userDisplayName, userEmail)
+                    .onFailure { _snackbarMessage.value = "ซิงค์เริ่มต้นไม่สำเร็จ: ${it.localizedMessage}" }
+                flushOfflineSyncQueue(forceRetryFailed = false, notifyUser = false)
+            }
         }
         viewModelScope.launch {
             tradingDao.observePendingSyncCount(currentUserId).collect { pending ->
@@ -204,7 +206,7 @@ class TradingViewModel(
         viewModelScope.launch {
             while (isActive) {
                 delay(20_000L)
-                if (_terminalState.value.offlineSyncStatus.pendingCount > 0) {
+                if (credentialVault.isCloudSyncEnabled() && _terminalState.value.offlineSyncStatus.pendingCount > 0) {
                     flushOfflineSyncQueue(forceRetryFailed = false, notifyUser = false)
                 }
             }
