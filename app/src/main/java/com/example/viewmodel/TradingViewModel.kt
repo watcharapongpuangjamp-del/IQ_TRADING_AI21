@@ -97,7 +97,6 @@ data class TerminalUiState(
     val autoSelectStrategy: Boolean = true,
     val pinnedStrategyId: String? = null,
     val wsState: WebSocketConnectionState = WebSocketConnectionState(),
-    val offlineSyncStatus: OfflineSyncStatus = OfflineSyncStatus()
 )
 
 class TradingViewModel(
@@ -818,7 +817,6 @@ class TradingViewModel(
                         status = lifecycle.name,
                         pnl = 0.0,
                         signal = currentSignal,
-                        syncedToCloud = false
                     )
                     refreshBackendExecutionState(settings.backendBaseUrl, backendToken)
                     finishPipeline(
@@ -874,7 +872,6 @@ class TradingViewModel(
                     status = finalStatus.name,
                     pnl = dto.pnl,
                     signal = currentSignal,
-                    syncedToCloud = false
                 )
 
                 _terminalState.update { it.copy(executionStage = ExecutionStage.PERFORMANCE_EVAL) }
@@ -963,7 +960,6 @@ class TradingViewModel(
                 status = finalStatus.name,
                 pnl = pnl,
                 signal = currentSignal,
-                syncedToCloud = false
             )
 
             _terminalState.update { it.copy(executionStage = ExecutionStage.PERFORMANCE_EVAL) }
@@ -1114,7 +1110,6 @@ class TradingViewModel(
         status: String,
         pnl: Double,
         signal: SignalAnalysis,
-        syncedToCloud: Boolean = false
     ) {
         withContext(Dispatchers.IO) {
             tradingDao.upsertTrade(
@@ -1136,7 +1131,6 @@ class TradingViewModel(
                     calibratedProbability = signal.calibratedProbability,
                     explanation = signal.explanation,
                     createdAtMillis = System.currentTimeMillis(),
-                    syncedToCloud = syncedToCloud
                 )
             )
         }
@@ -1463,7 +1457,7 @@ class TradingViewModel(
 
     private suspend fun updateProfileAndDailySummary(pnl: Double, won: Boolean) {
         val updatedBal = (currentBalance() + pnl).coerceAtLeast(0.0)
-        localRepository.updateUserBalanceAndMode(updatedBal, currentExecutionMode(), markBackupTimestamp = true)
+        localRepository.updateUserBalanceAndMode(updatedBal, currentExecutionMode())
 
         val dateKey = localRepository.todayDateKey()
         val existing = todaySummary()
