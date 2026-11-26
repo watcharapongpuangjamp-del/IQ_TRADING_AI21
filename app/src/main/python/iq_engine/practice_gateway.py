@@ -117,7 +117,7 @@ class PracticeReadOnlyGateway:
                 if not isinstance(balances, list):
                     raise GatewayError("Broker profile has no balance list.")
 
-                selected_id = client.get_balance_id()
+                selected_id = self._bounded(client.get_balance_id, "selected-account-id")
                 if selected_id is None or str(selected_id).strip() == "":
                     raise GatewayError("Broker did not identify the selected account balance.")
                 row = next(
