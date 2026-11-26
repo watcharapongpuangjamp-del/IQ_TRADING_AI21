@@ -99,7 +99,8 @@ data class SyncFlushResult(
 
 class OfflineSyncQueueManager(
     private val tradingDao: TradingDao,
-    private val cloudRepository: TradingCloudRepository
+    private val cloudRepository: TradingCloudRepository,
+    private val cloudSyncEnabled: suspend () -> Boolean = { false }
 ) {
     private val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
     private val tradeCreateAdapter = moshi.adapter(QueuedTradeCreatePayload::class.java)
@@ -281,6 +282,7 @@ class OfflineSyncQueueManager(
     }
 
     suspend fun flushPending(userId: String, forceRetryFailed: Boolean = false): SyncFlushResult {
+        if (!cloudSyncEnabled()) return SyncFlushResult(lastError = "Cloud Sync is disabled")
         return flushMutex.withLock {
             val now = System.currentTimeMillis()
             if (forceRetryFailed) {
