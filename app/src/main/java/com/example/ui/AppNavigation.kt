@@ -82,7 +82,7 @@ import com.example.ui.screens.SettingsDocsScreen
 import com.example.ui.screens.StrategyRiskScreen
 import com.example.ui.screens.TerminalScreen
 import com.example.ui.theme.LocalTradingColors
-import com.example.viewmodel.CloudUiState
+import com.example.viewmodel.LocalDataState
 import com.example.viewmodel.TradingViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -201,19 +201,19 @@ private fun AuthenticatedTradingShell(
         }
     }
 
-    val userProfile = (profileState as? CloudUiState.Success)?.data
-    val strategies = (strategiesState as? CloudUiState.Success)?.data.orEmpty()
+    val userProfile = (profileState as? LocalDataState.Success)?.data
+    val strategies = (strategiesState as? LocalDataState.Success)?.data.orEmpty()
     val activeStrategy = strategies.firstOrNull { it.active }
         ?: strategies.firstOrNull()
         ?: StrategyConfig(userId = currentUserId)
-    val riskPolicy = (riskPolicyState as? CloudUiState.Success)?.data
+    val riskPolicy = (riskPolicyState as? LocalDataState.Success)?.data
         ?: RiskPolicy(userId = currentUserId)
-    val trades = (tradesState as? CloudUiState.Success)?.data.orEmpty()
-    val dailySummaries = (dailySummariesState as? CloudUiState.Success)?.data.orEmpty()
+    val trades = (tradesState as? LocalDataState.Success)?.data.orEmpty()
+    val dailySummaries = (dailySummariesState as? LocalDataState.Success)?.data.orEmpty()
     val todayDateKey = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) }
 
-    val cloudError = listOf(profileState, strategiesState, riskPolicyState, tradesState)
-        .filterIsInstance<CloudUiState.Error>()
+    val dataError = listOf(profileState, strategiesState, riskPolicyState, tradesState)
+        .filterIsInstance<LocalDataState.Error>()
         .firstOrNull()?.message
 
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -386,7 +386,7 @@ private fun AuthenticatedTradingShell(
                         }
                     }
 
-                    if (!cloudError.isNullOrBlank()) {
+                    if (!dataError.isNullOrBlank()) {
                         Surface(
                             color = tradingColors.bearishContainer,
                             modifier = Modifier
@@ -395,7 +395,7 @@ private fun AuthenticatedTradingShell(
                                 .padding(12.dp)
                         ) {
                             Text(
-                                text = "Local Database: $cloudError",
+                                text = "Local Database: $dataError",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = tradingColors.bearish,
                                 modifier = Modifier.padding(10.dp)
