@@ -739,7 +739,7 @@ class TradingViewModel(
 
             if (!riskResult.allowed) {
                 if (isAuto && (policy.emergencyStopped || riskResult.remainingDailyTrades == 0 || riskResult.remainingLossBudget <= 0.0)) {
-                    cloudRepository.saveRiskPolicy(policy.copy(autoTradeEnabled = false))
+                    localRepository.saveRiskPolicy(policy.copy(autoTradeEnabled = false))
                     dispatchAlerts(
                         isRiskAlert = true,
                         title = "RISK GUARD LOCKOUT",
@@ -812,7 +812,7 @@ class TradingViewModel(
                         calibratedProbability = currentSignal.calibratedProbability,
                         explanation = "${currentSignal.explanation} [Corr: ${dto.correlation_id} | State: ${lifecycle.name}]"
                     )
-                    val createResult = cloudRepository.createTrade(openTrade)
+                    val createResult = localRepository.createTrade(openTrade)
                     val localId = createResult.getOrElse { dto.order_id.ifBlank { UUID.randomUUID().toString() } }
                     persistTradeToRoom(
                         tradeId = localId,
@@ -868,7 +868,7 @@ class TradingViewModel(
                     calibratedProbability = currentSignal.calibratedProbability,
                     explanation = "${currentSignal.explanation} [Corr: ${dto.correlation_id}]"
                 )
-                val createSettled = cloudRepository.createTrade(settledTrade)
+                val createSettled = localRepository.createTrade(settledTrade)
                 val createdId = createSettled.getOrElse { dto.order_id.ifBlank { UUID.randomUUID().toString() } }
                 persistTradeToRoom(
                     tradeId = createdId,
@@ -925,7 +925,7 @@ class TradingViewModel(
                 calibratedProbability = currentSignal.calibratedProbability,
                 explanation = currentSignal.explanation
             )
-            val createPendingRes = cloudRepository.createTrade(pendingTrade)
+            val createPendingRes = localRepository.createTrade(pendingTrade)
             val createdId = createPendingRes.getOrElse { "local_${UUID.randomUUID().toString().take(12)}" }
 
             dispatchAlerts(
@@ -958,7 +958,7 @@ class TradingViewModel(
             val pnl = if (won) strategy.tradeAmount * spec.payoutRate else -strategy.tradeAmount
 
             _terminalState.update { it.copy(executionStage = ExecutionStage.TRADE_LOGGING) }
-            val settleRes = cloudRepository.settleTrade(createdId, exitPrice, finalStatus, pnl)
+            val settleRes = localRepository.settleTrade(createdId, exitPrice, finalStatus, pnl)
             persistTradeToRoom(
                 tradeId = createdId,
                 strategy = strategy,
@@ -1261,7 +1261,7 @@ class TradingViewModel(
                 return@launch
             }
             val updated = policy.copy(autoTradeEnabled = enabled)
-            cloudRepository.saveRiskPolicy(updated)
+            localRepository.saveRiskPolicy(updated)
                 .onSuccess {
                     syncRiskToBackendIfConnected(updated)
                     _snackbarMessage.value = if (enabled) "เปิดระบบเทรดอัตโนมัติ (SIMULATION)" else "ปิดระบบเทรดอัตโนมัติแล้ว"
@@ -1277,7 +1277,7 @@ class TradingViewModel(
         viewModelScope.launch {
             val policy = currentRiskPolicy()
             val updated = policy.copy(emergencyStopped = true, autoTradeEnabled = false)
-            cloudRepository.saveRiskPolicy(updated)
+            localRepository.saveRiskPolicy(updated)
 
             val baseUrl = integrationSettings.value.backendBaseUrl
             if (backendClient.isValidHttpUrl(baseUrl)) {
@@ -1296,8 +1296,8 @@ class TradingViewModel(
         viewModelScope.launch {
             val policy = currentRiskPolicy()
             val updated = policy.copy(emergencyStopped = false)
-            cloudRepository.saveRiskPolicy(updated)
-                .onFailure { syncQueueManager.enqueueRiskPolicy(updated, currentUserId) }
+            localRepository.saveRiskPolicy(updated)
+                .onFailure {  }
             val baseUrl = integrationSettings.value.backendBaseUrl
             if (backendClient.isValidHttpUrl(baseUrl)) {
                 backendClient.syncEmergencyStop(baseUrl, credentialVault.getBackendToken(), stopped = false)
@@ -1312,7 +1312,7 @@ class TradingViewModel(
             if (backendClient.isValidHttpUrl(baseUrl)) {
                 backendClient.syncStrategy(baseUrl, credentialVault.getBackendToken(), strategy)
             }
-            cloudRepository.saveStrategy(strategy)
+            localRepository.saveStrategy(strategy)
                 .onSuccess {
                     _snackbarMessage.value = "บันทึกกลยุทธ์ '${strategy.name}' และซิงค์แล้ว"
                 }
@@ -1325,7 +1325,7 @@ class TradingViewModel(
     fun saveRiskPolicyConfig(policy: RiskPolicy) {
         viewModelScope.launch {
             syncRiskToBackendIfConnected(policy)
-            cloudRepository.saveRiskPolicy(policy)
+            localRepository.saveRiskPolicy(policy)
                 .onSuccess {
                     _snackbarMessage.value = "บันทึกนโยบาย Risk Management แล้ว"
                 }
@@ -1356,14 +1356,14 @@ class TradingViewModel(
                     return@launch
                 }
             }
-            cloudRepository.updateUserBalanceAndMode(currentBalance(), targetMode)
+            localRepository.updateUserBalanceAndMode(currentBalance(), targetMode)
                 .onSuccess { _snackbarMessage.value = "สลับโหมดเป็น ${targetMode.label} แล้ว" }
         }
     }
 
     fun resetSimulationBalance() {
         viewModelScope.launch {
-            cloudRepository.updateUserBalanceAndMode(10000.0, ExecutionMode.SIMULATION)
+            localRepository.updateUserBalanceAndMode(10000.0, ExecutionMode.SIMULATION)
                 .onSuccess { _snackbarMessage.value = "รีเซ็ตยอด Simulation Balance เป็น $10,000.00 แล้ว" }
         }
     }
@@ -1445,7 +1445,7 @@ class TradingViewModel(
     fun syncCloudBackupNow() {
         viewModelScope.launch {
             _isSyncingCloud.value = true
-            cloudRepository.updateUserBalanceAndMode(currentBalance(), currentExecutionMode(), markBackupTimestamp = true)
+            localRepository.updateUserBalanceAndMode(currentBalance(), currentExecutionMode(), markBackupTimestamp = true)
                 .onSuccess { _snackbarMessage.value = "สำรองข้อมูลกลยุทธ์และประวัติขึ้น Cloud Firestore สำเร็จ" }
                 .onFailure { _snackbarMessage.value = "สำรองข้อมูลไม่สำเร็จ: ${it.localizedMessage}" }
             _isSyncingCloud.value = false
@@ -1484,9 +1484,9 @@ class TradingViewModel(
 
     private suspend fun updateProfileAndDailySummary(pnl: Double, won: Boolean) {
         val updatedBal = (currentBalance() + pnl).coerceAtLeast(0.0)
-        cloudRepository.updateUserBalanceAndMode(updatedBal, currentExecutionMode(), markBackupTimestamp = true)
+        localRepository.updateUserBalanceAndMode(updatedBal, currentExecutionMode(), markBackupTimestamp = true)
 
-        val dateKey = cloudRepository.todayDateKey()
+        val dateKey = localRepository.todayDateKey()
         val existing = todaySummary()
         val newNetPnl = (existing?.netPnl ?: 0.0) + pnl
         val currentDrawdown = if (newNetPnl < 0) -newNetPnl else 0.0
@@ -1501,8 +1501,8 @@ class TradingViewModel(
             consecutiveLosses = if (won) 0 else (existing?.consecutiveLosses ?: 0) + 1,
             peakDrawdown = maxOf(existing?.peakDrawdown ?: 0.0, currentDrawdown)
         )
-        cloudRepository.upsertDailySummary(summary)
-            .onFailure { syncQueueManager.enqueueDailySummary(summary) }
+        localRepository.upsertDailySummary(summary)
+            .onFailure {  }
     }
 
     private fun finishPipeline(stage: ExecutionStage, message: String) {
@@ -1544,7 +1544,7 @@ class TradingViewModel(
         (tradesState.value as? CloudUiState.Success)?.data.orEmpty()
 
     private fun todaySummary(): DailyPnLSummary? {
-        val key = cloudRepository.todayDateKey()
+        val key = localRepository.todayDateKey()
         return (dailySummariesState.value as? CloudUiState.Success)?.data.orEmpty().firstOrNull { it.dateKey == key }
     }
 
