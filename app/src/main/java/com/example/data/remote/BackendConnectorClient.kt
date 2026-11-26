@@ -2,15 +2,19 @@ package com.example.data.remote
 
 import com.example.model.BackendHealthState
 import com.example.model.BackendOrderSummary
+import com.example.model.BacktestReport
 import com.example.model.Candle
 import com.example.model.ExecutionMode
+import com.example.model.LiveReadinessReport
 import com.example.model.MlDriftReport
 import com.example.model.MlModelSummary
 import com.example.model.OrderLifecycleEvent
+import com.example.model.PerformanceAnalyticsReport
 import com.example.model.ReconcileSummary
 import com.example.model.RiskPolicy
 import com.example.model.StrategyConfig
 import com.example.model.StrategySelectionReport
+import com.example.model.SystemDiagnosticsReport
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CancellationException
@@ -192,6 +196,30 @@ interface FastApiTradingApi {
         @Header("Authorization") authHeader: String?,
         @Body payload: SelectStrategyRequestDto
     ): Response<StrategySelectionReportDto>
+
+    @GET("api/v1/trading/performance")
+    suspend fun getTradingPerformance(
+        @Header("Authorization") authHeader: String?,
+        @Query("mode") mode: String = "SIMULATION"
+    ): Response<TradingPerformanceResponseDto>
+
+    @POST("api/v1/backtest/run")
+    suspend fun runBacktest(
+        @Header("Authorization") authHeader: String?,
+        @Body payload: BacktestRunRequestDto
+    ): Response<BacktestRunResponseDto>
+
+    @GET("api/v1/trading/live-readiness")
+    suspend fun getLiveReadiness(
+        @Header("Authorization") authHeader: String?
+    ): Response<LiveReadinessResponseDto>
+
+    @GET("api/v1/system/diagnostics")
+    suspend fun getSystemDiagnostics(
+        @Header("Authorization") authHeader: String?,
+        @Query("instrument") instrument: String = "EUR/USD",
+        @Query("timeframe") timeframe: String = "1m"
+    ): Response<SystemDiagnosticsResponseDto>
 }
 
 class BackendConnectorClient {
@@ -206,6 +234,9 @@ class BackendConnectorClient {
     private val driftReportAdapter = moshi.adapter(ModelDriftCheckResponseDto::class.java)
     private val orderResponseAdapter = moshi.adapter(OrderSubmitResponseDto::class.java)
     private val reconcileAdapter = moshi.adapter(ReconcileSummaryDto::class.java)
+    private val performanceAdapter = moshi.adapter(TradingPerformanceResponseDto::class.java)
+    private val backtestAdapter = moshi.adapter(BacktestRunResponseDto::class.java)
+    private val diagnosticsAdapter = moshi.adapter(SystemDiagnosticsResponseDto::class.java)
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
@@ -770,6 +801,89 @@ class BackendConnectorClient {
             response.body()!!.toDomain(userId)
         } else {
             throw IllegalStateException("Strategy select HTTP ${response.code()}")
+        }
+    }
+
+    fun parseTradingPerformanceJson(rawJson: String): TradingPerformanceResponseDto? = try {
+        performanceAdapter.fromJson(rawJson)
+    } catch (_: Exception) {
+        null
+    }
+
+    fun parseBacktestResponseJson(rawJson: String): BacktestRunResponseDto? = try {
+        backtestAdapter.fromJson(rawJson)
+    } catch (_: Exception) {
+        null
+    }
+
+    fun parseSystemDiagnosticsJson(rawJson: String): SystemDiagnosticsResponseDto? = try {
+        diagnosticsAdapter.fromJson(rawJson)
+    } catch (_: Exception) {
+        null
+    }
+
+    suspend fun fetchTradingPerformance(
+        baseUrl: String,
+        bearerToken: String?,
+        mode: String = "SIMULATION"
+    ): Result<PerformanceAnalyticsReport> = safeCall {
+        val response = buildApi(baseUrl).getTradingPerformance(buildAuthHeader(bearerToken), mode)
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!.toDomain()
+        } else {
+            throw IllegalStateException("Performance HTTP ${response.code()}")
+        }
+    }
+
+    suspend fun runBacktest(
+        baseUrl: String,
+        bearerToken: String?,
+        instrument: String,
+        timeframe: String,
+        strategyId: String,
+        stakeAmount: Double = 25.0,
+        lookbackBars: Int = 180
+    ): Result<BacktestReport> = safeCall {
+        val response = buildApi(baseUrl).runBacktest(
+            buildAuthHeader(bearerToken),
+            BacktestRunRequestDto(
+                instrument = instrument,
+                timeframe = timeframe,
+                strategy_id = strategyId,
+                stake_amount = stakeAmount,
+                lookback_bars = lookbackBars
+            )
+        )
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!.toDomain()
+        } else {
+            throw IllegalStateException("Backtest HTTP ${response.code()}")
+        }
+    }
+
+    suspend fun fetchLiveReadiness(
+        baseUrl: String,
+        bearerToken: String?
+    ): Result<LiveReadinessReport> = safeCall {
+        val response = buildApi(baseUrl).getLiveReadiness(buildAuthHeader(bearerToken))
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!.toDomain()
+        } else {
+            throw IllegalStateException("Live readiness HTTP ${response.code()}")
+        }
+    }
+
+    suspend fun fetchSystemDiagnostics(
+        baseUrl: String,
+        bearerToken: String?,
+        instrument: String = "EUR/USD",
+        timeframe: String = "1m"
+    ): Result<SystemDiagnosticsReport> = safeCall {
+        val response = buildApi(baseUrl).getSystemDiagnostics(buildAuthHeader(bearerToken), instrument, timeframe)
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!.toDomain()
+        } else {
+            throw IllegalStateException("Diagnostics HTTP ${response.code()}")
         }
     }
 

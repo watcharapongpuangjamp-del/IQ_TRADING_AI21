@@ -510,6 +510,8 @@ class TradeExecutionEngine:
             exit_price=0.0,
             status=TradeStatus.OPEN.value,
             lifecycle_state=OrderLifecycleState.CREATED.value,
+            strategy_name=strategy.name,
+            market_regime=_snapshot.regime.value,
             date_key=date_key,
         )
         db.add(record)

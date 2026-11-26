@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from app.config import Settings, get_settings
 from app.connectors.simulation import INSTRUMENT_SPECS, SimulationConnector
 from app.database import SessionLocal, engine, ensure_schema_migrations, get_db
+from app.engines.backtest_engine import WalkForwardBacktestEngine
+from app.engines.diagnostics_engine import LiveReadinessEvaluator, SystemDiagnosticsEngine
 from app.engines.execution_engine import (
     ExecutionAuthorizationError,
     ExecutionConnectorError,
@@ -33,12 +35,15 @@ from app.ml.trainer import ModelTrainer, ValidationGatePolicy
 from app.models import ModelRegistryModel, OrderRecordModel, RiskPolicyModel, TradingStateModel
 from app.repositories.historical_candles import HistoricalCandleRepository
 from app.schemas import (
+    BacktestRunRequest,
+    BacktestRunResponse,
     CandleHistoryIngestRequest,
     CandleHistoryIngestResponse,
     CandleSchema,
     DataQualityReportSchema,
     ExecutionMode,
     HealthResponse,
+    LiveReadinessResponse,
     MarketIntelligenceResponse,
     ModeSwitchRequest,
     ModelDriftCheckResponse,
@@ -59,6 +64,8 @@ from app.schemas import (
     SignalResponse,
     StrategyParameters,
     StrategySelectionReportSchema,
+    SystemDiagnosticsResponse,
+    TradingPerformanceResponse,
     TradingStateResponse,
     TrainModelRequest,
 )
@@ -849,6 +856,20 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         payload: ModeSwitchRequest,
         db: Session = Depends(get_db),
     ) -> HealthResponse:
+        if payload.mode == ExecutionMode.LIVE:
+            readiness = LiveReadinessEvaluator.evaluate(
+                db=db,
+                connector=connector,
+                settings=settings,
+                data_quality_ok=True,
+                owner_confirmed=payload.explicit_live_confirmation,
+            )
+            if not readiness["overall_ready"]:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="LIVE Gate blocked: " + "; ".join(readiness["blocking_reasons"]),
+                )
+
         authorized, reason = ExecutionModeController.authorize_mode(
             requested_mode=payload.mode,
             connector=connector,
@@ -877,6 +898,110 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     async def get_evaluation_summary(db: Session = Depends(get_db)) -> Dict[str, object]:
         orders = db.query(OrderRecordModel).all()
         return LearningEvaluationEngine.summarize_orders(orders)
+
+    @application.get(
+        "/api/v1/trading/performance",
+        response_model=TradingPerformanceResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Analytics"],
+    )
+    async def get_trading_performance(
+        mode: str = Query(default="SIMULATION", pattern="^(SIMULATION|LIVE|DEMO|ALL)$"),
+        db: Session = Depends(get_db),
+    ) -> TradingPerformanceResponse:
+        orders = db.query(OrderRecordModel).order_by(OrderRecordModel.created_at.asc()).all()
+        report = LearningEvaluationEngine.build_performance_report(orders, mode_filter=mode)
+        return TradingPerformanceResponse(**report)
+
+    @application.post(
+        "/api/v1/backtest/run",
+        response_model=BacktestRunResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Analytics"],
+    )
+    async def run_walk_forward_backtest(
+        payload: BacktestRunRequest,
+        db: Session = Depends(get_db),
+    ) -> BacktestRunResponse:
+        if not INSTRUMENT_PATTERN.match(payload.instrument):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid instrument format.")
+        candles = HistoricalCandleRepository.get_candles(
+            db, payload.instrument, payload.timeframe, limit=payload.lookback_bars
+        )
+        if len(candles) < payload.lookback_bars:
+            candles = await connector.get_candles(
+                instrument=payload.instrument,
+                timeframe=payload.timeframe,
+                limit=payload.lookback_bars,
+            )
+            HistoricalCandleRepository.upsert_candles(
+                db, payload.instrument, payload.timeframe, candles, source=connector.name
+            )
+        payout = INSTRUMENT_SPECS.get(payload.instrument, INSTRUMENT_SPECS["EUR/USD"])["payout"]
+        try:
+            res = WalkForwardBacktestEngine.run_backtest(
+                candles=candles,
+                instrument=payload.instrument,
+                timeframe=payload.timeframe,
+                strategy_id=payload.strategy_id,
+                stake_amount=payload.stake_amount,
+                payout_rate=payout,
+                expiry_bars=payload.expiry_bars,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        return BacktestRunResponse(**res)
+
+    @application.get(
+        "/api/v1/trading/live-readiness",
+        response_model=LiveReadinessResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Safety"],
+    )
+    async def get_live_readiness(db: Session = Depends(get_db)) -> LiveReadinessResponse:
+        data_ok = True
+        try:
+            candles = await connector.get_candles(instrument="EUR/USD", timeframe="1m", limit=40)
+            valid, _ = MarketIntelligenceEngine.validate_candles(candles)
+            data_ok = valid
+        except Exception:
+            data_ok = False
+        report = LiveReadinessEvaluator.evaluate(
+            db=db,
+            connector=connector,
+            settings=settings,
+            data_quality_ok=data_ok,
+            owner_confirmed=False,
+        )
+        state = TradeExecutionEngine.get_or_create_state(db)
+        report["current_mode"] = state.execution_mode
+        return LiveReadinessResponse(**report)
+
+    @application.get(
+        "/api/v1/system/diagnostics",
+        response_model=SystemDiagnosticsResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["System"],
+    )
+    async def get_system_diagnostics(
+        instrument: str = Query(default="EUR/USD", min_length=3, max_length=20),
+        timeframe: str = Query(default="1m", pattern="^(1m|5m|15m)$"),
+        db: Session = Depends(get_db),
+    ) -> SystemDiagnosticsResponse:
+        if not INSTRUMENT_PATTERN.match(instrument):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid instrument format.")
+        report = await SystemDiagnosticsEngine.run_diagnostics(
+            db=db,
+            connector=connector,
+            settings=settings,
+            instrument=instrument,
+            timeframe=timeframe,
+        )
+        state = TradeExecutionEngine.get_or_create_state(db)
+        report["live_readiness"]["current_mode"] = state.execution_mode
+        return SystemDiagnosticsResponse(**report)
 
     @application.websocket("/ws/market/{instrument:path}")
     async def market_stream(

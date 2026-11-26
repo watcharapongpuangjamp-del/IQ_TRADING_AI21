@@ -310,6 +310,20 @@ object LocalStrategySelectorEngine {
         )
     }
 
+    fun listCatalogIdsAndNames(): List<Pair<String, String>> =
+        listOf("auto" to "Auto Regime Selector") + templates.map { it.strategyId to it.name }
+
+    fun findTemplateConfig(strategyId: String): Pair<String, StrategyConfig> {
+        val tpl = templates.firstOrNull { it.strategyId == strategyId }
+        return if (tpl != null) tpl.name to tpl.defaultConfig else "Auto Regime Selector" to StrategyConfig()
+    }
+
+    fun evaluateBarDirection(
+        strategyId: String,
+        window: List<Candle>,
+        cfg: StrategyConfig
+    ): TradeDirection = barDirection(strategyId, window, cfg)
+
     private fun barDirection(
         strategyId: String,
         window: List<Candle>,

@@ -38,10 +38,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -56,8 +59,12 @@ import androidx.core.content.ContextCompat
 import com.example.model.BackendHealthState
 import com.example.model.ExecutionMode
 import com.example.model.IntegrationSettings
+import com.example.model.LiveReadinessReport
 import com.example.model.LocalDatabaseStats
+import com.example.model.RiskPolicy
+import com.example.model.SystemDiagnosticsReport
 import com.example.model.UserProfile
+import com.example.ui.components.DiagnosticsLiveGatePanel
 import com.example.ui.theme.LocalTradingColors
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -69,7 +76,12 @@ fun SettingsDocsScreen(
     databaseStats: LocalDatabaseStats,
     settings: IntegrationSettings,
     backendHealth: BackendHealthState,
-    onSwitchMode: (ExecutionMode) -> Unit,
+    riskPolicy: RiskPolicy = RiskPolicy(),
+    liveReadiness: LiveReadinessReport = LiveReadinessReport(),
+    diagnosticsReport: SystemDiagnosticsReport? = null,
+    isDiagnosticsBusy: Boolean = false,
+    onRunDiagnostics: () -> Unit = {},
+    onSwitchMode: (ExecutionMode, Boolean) -> Unit,
     onResetBalance: () -> Unit,
     onSaveIntegrations: (
         backendUrl: String,
@@ -92,6 +104,7 @@ fun SettingsDocsScreen(
     val tradingColors = LocalTradingColors.current
     val context = LocalContext.current
     val currentMode = ExecutionMode.safeValueOf(userProfile?.executionMode)
+    var selectedTab by remember { mutableIntStateOf(0) }
     var traderNameInput by remember(userProfile?.displayName) {
         mutableStateOf(userProfile?.displayName ?: "Local Trader")
     }
@@ -127,11 +140,44 @@ fun SettingsDocsScreen(
         if (telegramChatId.isEmpty() && settings.telegramChatId.isNotEmpty()) telegramChatId = settings.telegramChatId
     }
 
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
+    Column(modifier = modifier.fillMaxSize()) {
+        TabRow(
+            selectedTabIndex = selectedTab,
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = tradingColors.cyan
+        ) {
+            Tab(
+                selected = selectedTab == 0,
+                onClick = { selectedTab = 0 },
+                text = { Text("Connect & SQLite", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, maxLines = 1) },
+                modifier = Modifier.testTag("tab_connect_sqlite")
+            )
+            Tab(
+                selected = selectedTab == 1,
+                onClick = { selectedTab = 1 },
+                text = { Text("Diagnostics & Live Gate", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, maxLines = 1) },
+                modifier = Modifier.testTag("tab_diagnostics_live")
+            )
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            if (selectedTab == 1) {
+                item {
+                    DiagnosticsLiveGatePanel(
+                        liveReadiness = liveReadiness,
+                        diagnosticsReport = diagnosticsReport,
+                        isDiagnosticsBusy = isDiagnosticsBusy,
+                        riskPolicy = riskPolicy,
+                        backendHealth = backendHealth,
+                        onRunDiagnostics = onRunDiagnostics,
+                        onSwitchMode = onSwitchMode
+                    )
+                }
+            } else {
         // 1. Execution Mode Controller & FastAPI Hybrid Connector
         item {
             Surface(
@@ -158,10 +204,16 @@ fun SettingsDocsScreen(
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ExecutionMode.entries.forEach { mode ->
-                            val isLiveLocked = mode == ExecutionMode.LIVE && !backendHealth.liveAuthorized
+                            val isLiveLocked = mode == ExecutionMode.LIVE && !liveReadiness.prerequisitesReady
                             FilterChip(
                                 selected = currentMode == mode,
-                                onClick = { onSwitchMode(mode) },
+                                onClick = {
+                                    if (mode == ExecutionMode.LIVE) {
+                                        selectedTab = 1
+                                    } else {
+                                        onSwitchMode(mode, false)
+                                    }
+                                },
                                 label = {
                                     Text(
                                         text = if (isLiveLocked) "LIVE (Locked)" else mode.label,
@@ -474,6 +526,8 @@ fun SettingsDocsScreen(
                         body = "ข้อมูลโปรไฟล์ กลยุทธ์ นโยบายความเสี่ยง ประวัติการเทรด สรุป P&L รายวัน และแคชแท่งเทียนถูกจัดเก็บโดยตรงในฐานข้อมูล Room SQLite บนอุปกรณ์ของคุณ (iq_trading_local_cache.db) โดยไม่ต้องพึ่งระบบ Cloud Sync หรือการเข้าสู่ระบบผ่านคลาวด์"
                     )
                 }
+            }
+        }
             }
         }
     }

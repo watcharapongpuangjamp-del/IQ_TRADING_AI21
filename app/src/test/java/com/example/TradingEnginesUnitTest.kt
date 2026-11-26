@@ -515,6 +515,281 @@ class TradingEnginesUnitTest {
         assertEquals("DRIFT_DETECTED", parsedSysDrift?.active_model_drift_status)
         assertEquals(0.82, parsedSysDrift?.active_model_drift_score ?: 0.0, 1e-6)
     }
+
+    @Test
+    fun phase8_performanceAnalyticsEngine_isolatesSimVsLive_andComputesBreakdowns() {
+        val baseTime = 1_700_000_000_000L
+        val trades = listOf(
+            com.example.model.TradeRecord(
+                id = "sim_1",
+                instrument = "EUR/USD",
+                timeframe = "1m",
+                mode = "SIMULATION",
+                amount = 100.0,
+                status = "WON",
+                pnl = 85.0,
+                strategyName = "EMA Trend Following",
+                marketRegime = "STRONG_TREND",
+                createdAtMillis = baseTime + 1_000L
+            ),
+            com.example.model.TradeRecord(
+                id = "sim_2",
+                instrument = "GBP/USD",
+                timeframe = "5m",
+                mode = "SIMULATION",
+                amount = 100.0,
+                status = "LOST",
+                pnl = -100.0,
+                strategyName = "RSI Reversal",
+                marketRegime = "SIDEWAYS",
+                createdAtMillis = baseTime + 2_000L
+            ),
+            com.example.model.TradeRecord(
+                id = "sim_3",
+                instrument = "EUR/USD",
+                timeframe = "1m",
+                mode = "SIMULATION",
+                amount = 100.0,
+                status = "WON",
+                pnl = 85.0,
+                strategyName = "EMA Trend Following",
+                marketRegime = "STRONG_TREND",
+                createdAtMillis = baseTime + 3_000L
+            ),
+            com.example.model.TradeRecord(
+                id = "live_1",
+                instrument = "BTC/USD",
+                timeframe = "15m",
+                mode = "LIVE",
+                amount = 50.0,
+                status = "WON",
+                pnl = 42.5,
+                strategyName = "Breakout Detection",
+                marketRegime = "BREAKOUT",
+                createdAtMillis = baseTime + 4_000L
+            )
+        )
+
+        val simReport = com.example.engine.PerformanceAnalyticsEngine.buildReport(trades, "SIMULATION")
+        assertEquals("SIMULATION", simReport.activeSummary.mode)
+        assertEquals(3, simReport.activeSummary.totalTrades)
+        assertEquals(1, simReport.liveSummary.totalTrades)
+        assertEquals(70.0, simReport.activeSummary.netPnl, 1e-6)
+        assertEquals(170.0, simReport.activeSummary.grossProfit, 1e-6)
+        assertEquals(100.0, simReport.activeSummary.grossLoss, 1e-6)
+        assertEquals(1.7, simReport.activeSummary.profitFactor, 1e-3)
+        assertEquals(100.0, simReport.activeSummary.maxDrawdown, 1e-6)
+        assertEquals(2, simReport.byStrategy.size)
+        assertEquals(2, simReport.byRegime.size)
+        assertEquals(2, simReport.byAsset.size)
+        assertEquals(2, simReport.byTimeframe.size)
+
+        val liveReport = com.example.engine.PerformanceAnalyticsEngine.buildReport(trades, "LIVE")
+        assertEquals("LIVE", liveReport.activeSummary.mode)
+        assertEquals(1, liveReport.activeSummary.totalTrades)
+        assertEquals(42.5, liveReport.activeSummary.netPnl, 1e-6)
+
+        val allReport = com.example.engine.PerformanceAnalyticsEngine.buildReport(trades, "ALL")
+        assertEquals("ALL (LABELED)", allReport.activeSummary.mode)
+        assertEquals(4, allReport.activeSummary.totalTrades)
+    }
+
+    @Test
+    fun phase8_localBacktestEngine_runsCausalWalkForward_andRejectsInsufficientCandles() {
+        val sim = MarketSimulationEngine()
+        val shortCandles = sim.generateInitialCandles("EUR/USD", 60, 20)
+        val tooShort = com.example.engine.LocalBacktestEngine.runBacktest(shortCandles, "EUR/USD")
+        assertTrue(tooShort.isFailure)
+
+        val candles = sim.generateInitialCandles("EUR/USD", 60, 140)
+        val res = com.example.engine.LocalBacktestEngine.runBacktest(
+            candles = candles,
+            instrument = "EUR/USD",
+            timeframe = "1m",
+            strategyId = "auto",
+            stakeAmount = 25.0,
+            payoutRate = 0.85
+        )
+        assertTrue(res.isSuccess)
+        val report = res.getOrThrow()
+        assertEquals(140, report.barsEvaluated)
+        assertEquals(report.wins + report.losses, report.totalTrades)
+        assertTrue(report.equityCurve.isNotEmpty())
+        assertTrue(report.equityCurve.size <= 80)
+        assertEquals(report.netPnl, report.equityCurve.last(), 1e-6)
+        assertTrue(report.maxDrawdown >= 0.0)
+    }
+
+    @Test
+    fun phase8_liveReadinessEvaluator_andSystemDiagnosticsRunner_enforceFiveGatesAndFailClosed() {
+        val settingsLocked = com.example.model.IntegrationSettings(
+            backendBaseUrl = "",
+            hasBackendToken = false
+        )
+        val healthOffline = com.example.model.BackendHealthState(
+            connected = false,
+            liveAuthorized = false
+        )
+        val dqValid = com.example.model.DataQualitySummary(valid = true, reason = "OK", candleCount = 120)
+        val policy = RiskPolicy(maxTradeAmount = 50.0, maxDailyLoss = 100.0, maxPortfolioExposure = 200.0)
+
+        val blocked = com.example.engine.LiveReadinessEvaluator.evaluateLocal(
+            backendHealth = healthOffline,
+            riskPolicy = policy,
+            settings = settingsLocked,
+            dataQuality = dqValid,
+            unresolvedOrdersCount = 1,
+            currentMode = ExecutionMode.SIMULATION,
+            ownerConfirmed = false
+        )
+        assertEquals(5, blocked.gates.size)
+        assertFalse(blocked.prerequisitesReady)
+        assertFalse(blocked.overallReady)
+        assertTrue(blocked.blockingReasons.isNotEmpty())
+
+        val readyUnconfirmed = com.example.engine.LiveReadinessEvaluator.evaluateLocal(
+            backendHealth = com.example.model.BackendHealthState(
+                connected = true,
+                liveAuthorized = true,
+                connectorName = "iq_broker",
+                supportedCapabilities = listOf("SIMULATION", "LIVE_ORDERS")
+            ),
+            riskPolicy = policy,
+            settings = com.example.model.IntegrationSettings(
+                backendBaseUrl = "https://api.iqtrading.example",
+                hasBackendToken = true
+            ),
+            dataQuality = dqValid,
+            unresolvedOrdersCount = 0,
+            currentMode = ExecutionMode.SIMULATION,
+            ownerConfirmed = false
+        )
+        assertTrue(readyUnconfirmed.prerequisitesReady)
+        assertFalse(readyUnconfirmed.overallReady)
+
+        val fullyConfirmed = com.example.engine.LiveReadinessEvaluator.evaluateLocal(
+            backendHealth = com.example.model.BackendHealthState(
+                connected = true,
+                liveAuthorized = true,
+                connectorName = "iq_broker",
+                supportedCapabilities = listOf("SIMULATION", "LIVE_ORDERS")
+            ),
+            riskPolicy = policy,
+            settings = com.example.model.IntegrationSettings(
+                backendBaseUrl = "https://api.iqtrading.example",
+                hasBackendToken = true
+            ),
+            dataQuality = dqValid,
+            unresolvedOrdersCount = 0,
+            currentMode = ExecutionMode.LIVE,
+            ownerConfirmed = true
+        )
+        assertTrue(fullyConfirmed.overallReady)
+
+        val sim = MarketSimulationEngine()
+        val diagOk = com.example.engine.SystemDiagnosticsRunner.runLocalDiagnostics(
+            dbStats = com.example.model.LocalDatabaseStats(totalTrades = 3, totalCachedCandles = 120, totalStrategies = 1),
+            candles = sim.generateInitialCandles("EUR/USD", 60, 80),
+            dataQuality = dqValid,
+            riskPolicy = policy,
+            backendHealth = healthOffline,
+            wsState = com.example.model.WebSocketConnectionState(),
+            settings = settingsLocked,
+            activeMlModel = null,
+            unresolvedOrdersCount = 0,
+            currentMode = ExecutionMode.SIMULATION,
+            vaultRoundTripOk = true
+        )
+        assertEquals(
+            com.example.model.DiagnosticCheckStatus.PASS,
+            diagOk.checks.first { it.checkId == "risk_fail_closed" }.status
+        )
+        assertEquals(com.example.model.DiagnosticCheckStatus.WARN, diagOk.overallStatus)
+
+        val diagVaultFail = com.example.engine.SystemDiagnosticsRunner.runLocalDiagnostics(
+            dbStats = com.example.model.LocalDatabaseStats(),
+            candles = emptyList(),
+            dataQuality = dqValid,
+            riskPolicy = policy,
+            backendHealth = healthOffline,
+            wsState = com.example.model.WebSocketConnectionState(),
+            settings = settingsLocked,
+            activeMlModel = null,
+            unresolvedOrdersCount = 0,
+            currentMode = ExecutionMode.SIMULATION,
+            vaultRoundTripOk = false
+        )
+        assertEquals(com.example.model.DiagnosticCheckStatus.FAIL, diagVaultFail.overallStatus)
+    }
+
+    @Test
+    fun phase8_backendConnectorClient_parsesPerformanceBacktestAndDiagnosticsJson() {
+        val client = com.example.data.remote.BackendConnectorClient()
+
+        val perfJson = """
+            {
+              "mode_filter": "SIMULATION",
+              "simulation_summary": {"mode": "SIMULATION", "total_trades": 5, "wins": 3, "losses": 2, "win_rate_pct": 60.0, "net_pnl": 55.0, "gross_profit": 255.0, "gross_loss": 200.0, "profit_factor": 1.275, "average_return_pct": 11.0, "max_drawdown": 100.0, "max_consecutive_wins": 2, "max_consecutive_losses": 1, "expectancy": 11.0},
+              "live_summary": {"mode": "LIVE", "total_trades": 0, "wins": 0, "losses": 0, "win_rate_pct": 0.0, "net_pnl": 0.0, "gross_profit": 0.0, "gross_loss": 0.0, "profit_factor": 0.0, "average_return_pct": 0.0, "max_drawdown": 0.0, "max_consecutive_wins": 0, "max_consecutive_losses": 0, "expectancy": 0.0},
+              "active_summary": {"mode": "SIMULATION", "total_trades": 5, "wins": 3, "losses": 2, "win_rate_pct": 60.0, "net_pnl": 55.0, "gross_profit": 255.0, "gross_loss": 200.0, "profit_factor": 1.275, "average_return_pct": 11.0, "max_drawdown": 100.0, "max_consecutive_wins": 2, "max_consecutive_losses": 1, "expectancy": 11.0},
+              "by_strategy": [{"label": "EMA Trend Following", "total_trades": 3, "wins": 2, "losses": 1, "win_rate_pct": 66.67, "net_pnl": 70.0, "profit_factor": 1.7}],
+              "by_regime": [{"label": "STRONG_TREND", "total_trades": 3, "wins": 2, "losses": 1, "win_rate_pct": 66.67, "net_pnl": 70.0, "profit_factor": 1.7}],
+              "by_asset": [{"label": "EUR/USD", "total_trades": 5, "wins": 3, "losses": 2, "win_rate_pct": 60.0, "net_pnl": 55.0, "profit_factor": 1.275}],
+              "by_timeframe": [{"label": "1m", "total_trades": 5, "wins": 3, "losses": 2, "win_rate_pct": 60.0, "net_pnl": 55.0, "profit_factor": 1.275}]
+            }
+        """.trimIndent()
+        val parsedPerf = client.parseTradingPerformanceJson(perfJson)?.toDomain()
+        assertEquals(5, parsedPerf?.activeSummary?.totalTrades)
+        assertEquals(1.275, parsedPerf?.activeSummary?.profitFactor ?: 0.0, 1e-6)
+        assertEquals("EMA Trend Following", parsedPerf?.byStrategy?.firstOrNull()?.label)
+
+        val btJson = """
+            {
+              "instrument": "EUR/USD",
+              "timeframe": "1m",
+              "strategy_id": "auto",
+              "strategy_name": "Auto Regime Selector",
+              "bars_evaluated": 180,
+              "total_trades": 12,
+              "wins": 7,
+              "losses": 5,
+              "win_rate_pct": 58.33,
+              "net_pnl": 23.75,
+              "gross_profit": 148.75,
+              "gross_loss": 125.0,
+              "profit_factor": 1.19,
+              "max_drawdown": 50.0,
+              "expectancy": 1.98,
+              "equity_curve": [0.0, 21.25, -3.75, 23.75],
+              "simulated_trades": [{"timestamp": 1700000060000, "direction": "CALL", "entry_price": 1.08, "exit_price": 1.081, "pnl": 21.25, "status": "WON", "market_regime": "STRONG_TREND", "strategy_name": "EMA Trend Following"}]
+            }
+        """.trimIndent()
+        val parsedBt = client.parseBacktestResponseJson(btJson)?.toDomain()
+        assertEquals(180, parsedBt?.barsEvaluated)
+        assertEquals(23.75, parsedBt?.netPnl ?: 0.0, 1e-6)
+        assertEquals(1, parsedBt?.simulatedTrades?.size)
+
+        val diagJson = """
+            {
+              "overall_status": "WARN",
+              "connector_name": "simulation_connector",
+              "connector_connected": true,
+              "checks": [{"check_id": "risk_fail_closed", "title": "Risk Guard", "status": "PASS", "detail": "OK"}],
+              "live_readiness": {
+                "prerequisites_ready": false,
+                "overall_ready": false,
+                "current_mode": "SIMULATION",
+                "gates": [{"gate_id": "broker_verified", "step_number": 1, "title": "1. Broker", "passed": false, "detail": "Sim mode"}],
+                "blocking_reasons": ["Sim mode"]
+              },
+              "checked_at": "2026-11-26T10:00:00Z"
+            }
+        """.trimIndent()
+        val parsedDiag = client.parseSystemDiagnosticsJson(diagJson)?.toDomain()
+        assertEquals(com.example.model.DiagnosticCheckStatus.WARN, parsedDiag?.overallStatus)
+        assertEquals(ExecutionMode.SIMULATION, parsedDiag?.liveReadiness?.currentMode)
+        assertEquals(1, parsedDiag?.liveReadiness?.gates?.size)
+    }
 }
 
 private class InMemoryTradingDao : com.example.data.local.TradingDao {

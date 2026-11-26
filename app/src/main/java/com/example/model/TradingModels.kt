@@ -153,6 +153,7 @@ data class TradeRecord(
     val status: String = TradeStatus.OPEN.name,
     val pnl: Double = 0.0,
     val strategyName: String = "EMA-RSI Momentum",
+    val marketRegime: String = "UNKNOWN",
     val confidenceScore: Int = 70,
     val calibratedProbability: Double = 0.62,
     val explanation: String = "",
@@ -495,4 +496,121 @@ data class LocalDatabaseStats(
     val totalStrategies: Int = 0,
     val totalDailySummaries: Int = 0,
     val lastSavedAtMillis: Long? = null
+)
+
+data class PerformanceBreakdownRow(
+    val label: String,
+    val totalTrades: Int,
+    val wins: Int,
+    val losses: Int,
+    val winRatePct: Double,
+    val netPnl: Double,
+    val profitFactor: Double
+)
+
+data class ModePerformanceSummary(
+    val mode: String = "SIMULATION",
+    val totalTrades: Int = 0,
+    val wins: Int = 0,
+    val losses: Int = 0,
+    val winRatePct: Double = 0.0,
+    val netPnl: Double = 0.0,
+    val grossProfit: Double = 0.0,
+    val grossLoss: Double = 0.0,
+    val profitFactor: Double = 0.0,
+    val averageReturnPct: Double = 0.0,
+    val maxDrawdown: Double = 0.0,
+    val maxConsecutiveWins: Int = 0,
+    val maxConsecutiveLosses: Int = 0,
+    val expectancy: Double = 0.0
+)
+
+data class PerformanceAnalyticsReport(
+    val modeFilter: String = "SIMULATION",
+    val simulationSummary: ModePerformanceSummary = ModePerformanceSummary("SIMULATION"),
+    val liveSummary: ModePerformanceSummary = ModePerformanceSummary("LIVE"),
+    val activeSummary: ModePerformanceSummary = ModePerformanceSummary("SIMULATION"),
+    val byStrategy: List<PerformanceBreakdownRow> = emptyList(),
+    val byRegime: List<PerformanceBreakdownRow> = emptyList(),
+    val byAsset: List<PerformanceBreakdownRow> = emptyList(),
+    val byTimeframe: List<PerformanceBreakdownRow> = emptyList()
+)
+
+data class BacktestTradeSample(
+    val timestampMillis: Long,
+    val direction: String,
+    val entryPrice: Double,
+    val exitPrice: Double,
+    val pnl: Double,
+    val status: String,
+    val marketRegime: String,
+    val strategyName: String
+)
+
+data class BacktestReport(
+    val instrument: String,
+    val timeframe: String,
+    val strategyId: String,
+    val strategyName: String,
+    val barsEvaluated: Int,
+    val totalTrades: Int,
+    val wins: Int,
+    val losses: Int,
+    val winRatePct: Double,
+    val netPnl: Double,
+    val grossProfit: Double,
+    val grossLoss: Double,
+    val profitFactor: Double,
+    val maxDrawdown: Double,
+    val expectancy: Double,
+    val equityCurve: List<Double>,
+    val simulatedTrades: List<BacktestTradeSample>,
+    val sourceLabel: String = "Local Walk-Forward"
+)
+
+enum class DiagnosticCheckStatus(val label: String) {
+    PASS("PASS"),
+    WARN("WARN"),
+    FAIL("FAIL");
+
+    companion object {
+        fun safeValueOf(raw: String?): DiagnosticCheckStatus = when (raw?.uppercase()) {
+            "PASS" -> PASS
+            "FAIL" -> FAIL
+            else -> WARN
+        }
+    }
+}
+
+data class DiagnosticCheckItem(
+    val checkId: String,
+    val title: String,
+    val status: DiagnosticCheckStatus,
+    val detail: String
+)
+
+data class LiveReadinessGateItem(
+    val gateId: String,
+    val stepNumber: Int,
+    val title: String,
+    val passed: Boolean,
+    val detail: String
+)
+
+data class LiveReadinessReport(
+    val prerequisitesReady: Boolean = false,
+    val overallReady: Boolean = false,
+    val currentMode: ExecutionMode = ExecutionMode.SIMULATION,
+    val gates: List<LiveReadinessGateItem> = emptyList(),
+    val blockingReasons: List<String> = emptyList(),
+    val evaluatedAtMillis: Long = System.currentTimeMillis()
+)
+
+data class SystemDiagnosticsReport(
+    val overallStatus: DiagnosticCheckStatus = DiagnosticCheckStatus.WARN,
+    val connectorName: String = "Local Simulation Engine",
+    val connectorConnected: Boolean = true,
+    val checks: List<DiagnosticCheckItem> = emptyList(),
+    val liveReadiness: LiveReadinessReport = LiveReadinessReport(),
+    val checkedAtMillis: Long = System.currentTimeMillis()
 )

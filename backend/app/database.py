@@ -35,6 +35,8 @@ def ensure_schema_migrations(target_engine) -> None:
             ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
             ("error_detail", "VARCHAR(512) NOT NULL DEFAULT ''"),
             ("reconciled_at", "DATETIME"),
+            ("strategy_name", "VARCHAR(80) NOT NULL DEFAULT 'Market Regime Adaptive'"),
+            ("market_regime", "VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN'"),
         ]
         for col_name, col_def in migrations:
             if col_name not in existing_cols:

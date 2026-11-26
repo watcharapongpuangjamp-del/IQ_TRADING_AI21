@@ -2,15 +2,25 @@ package com.example.data.remote
 
 import com.example.model.AlignmentState
 import com.example.model.BackendOrderSummary
+import com.example.model.BacktestReport
+import com.example.model.BacktestTradeSample
 import com.example.model.Candle
 import com.example.model.DataQualitySummary
+import com.example.model.DiagnosticCheckItem
+import com.example.model.DiagnosticCheckStatus
 import com.example.model.DriftStatus
+import com.example.model.ExecutionMode
+import com.example.model.LiveReadinessGateItem
+import com.example.model.LiveReadinessReport
 import com.example.model.MarketRegime
 import com.example.model.MlDriftReport
 import com.example.model.MlModelSummary
+import com.example.model.ModePerformanceSummary
 import com.example.model.MultiTimeframeReport
 import com.example.model.OrderLifecycleEvent
 import com.example.model.OrderLifecycleState
+import com.example.model.PerformanceAnalyticsReport
+import com.example.model.PerformanceBreakdownRow
 import com.example.model.ReconcileSummary
 import com.example.model.ReplaySessionState
 import com.example.model.RiskPolicy
@@ -18,6 +28,7 @@ import com.example.model.SignalAnalysis
 import com.example.model.StrategyConfig
 import com.example.model.StrategyModuleSummary
 import com.example.model.StrategySelectionReport
+import com.example.model.SystemDiagnosticsReport
 import com.example.model.TimeframeIntelligenceSummary
 import com.example.model.TradeDirection
 import com.squareup.moshi.JsonClass
@@ -644,3 +655,226 @@ data class WebSocketSystemDto(
     val active_model_drift_score: Double = 0.0,
     val active_model_drift_notes: String = ""
 )
+
+@JsonClass(generateAdapter = true)
+data class PerformanceBreakdownRowDto(
+    val label: String,
+    val total_trades: Int = 0,
+    val wins: Int = 0,
+    val losses: Int = 0,
+    val win_rate_pct: Double = 0.0,
+    val net_pnl: Double = 0.0,
+    val profit_factor: Double = 0.0
+) {
+    fun toDomain(): PerformanceBreakdownRow = PerformanceBreakdownRow(
+        label = label,
+        totalTrades = total_trades,
+        wins = wins,
+        losses = losses,
+        winRatePct = win_rate_pct,
+        netPnl = net_pnl,
+        profitFactor = profit_factor
+    )
+}
+
+@JsonClass(generateAdapter = true)
+data class ModePerformanceSummaryDto(
+    val mode: String = "SIMULATION",
+    val total_trades: Int = 0,
+    val wins: Int = 0,
+    val losses: Int = 0,
+    val win_rate_pct: Double = 0.0,
+    val net_pnl: Double = 0.0,
+    val gross_profit: Double = 0.0,
+    val gross_loss: Double = 0.0,
+    val profit_factor: Double = 0.0,
+    val average_return_pct: Double = 0.0,
+    val max_drawdown: Double = 0.0,
+    val max_consecutive_wins: Int = 0,
+    val max_consecutive_losses: Int = 0,
+    val expectancy: Double = 0.0
+) {
+    fun toDomain(): ModePerformanceSummary = ModePerformanceSummary(
+        mode = mode,
+        totalTrades = total_trades,
+        wins = wins,
+        losses = losses,
+        winRatePct = win_rate_pct,
+        netPnl = net_pnl,
+        grossProfit = gross_profit,
+        grossLoss = gross_loss,
+        profitFactor = profit_factor,
+        averageReturnPct = average_return_pct,
+        maxDrawdown = max_drawdown,
+        maxConsecutiveWins = max_consecutive_wins,
+        maxConsecutiveLosses = max_consecutive_losses,
+        expectancy = expectancy
+    )
+}
+
+@JsonClass(generateAdapter = true)
+data class TradingPerformanceResponseDto(
+    val mode_filter: String = "SIMULATION",
+    val simulation_summary: ModePerformanceSummaryDto = ModePerformanceSummaryDto("SIMULATION"),
+    val live_summary: ModePerformanceSummaryDto = ModePerformanceSummaryDto("LIVE"),
+    val active_summary: ModePerformanceSummaryDto = ModePerformanceSummaryDto("SIMULATION"),
+    val by_strategy: List<PerformanceBreakdownRowDto> = emptyList(),
+    val by_regime: List<PerformanceBreakdownRowDto> = emptyList(),
+    val by_asset: List<PerformanceBreakdownRowDto> = emptyList(),
+    val by_timeframe: List<PerformanceBreakdownRowDto> = emptyList()
+) {
+    fun toDomain(): PerformanceAnalyticsReport = PerformanceAnalyticsReport(
+        modeFilter = mode_filter,
+        simulationSummary = simulation_summary.toDomain(),
+        liveSummary = live_summary.toDomain(),
+        activeSummary = active_summary.toDomain(),
+        byStrategy = by_strategy.map { it.toDomain() },
+        byRegime = by_regime.map { it.toDomain() },
+        byAsset = by_asset.map { it.toDomain() },
+        byTimeframe = by_timeframe.map { it.toDomain() }
+    )
+}
+
+@JsonClass(generateAdapter = true)
+data class BacktestRunRequestDto(
+    val instrument: String = "EUR/USD",
+    val timeframe: String = "1m",
+    val strategy_id: String = "regime_adaptive",
+    val stake_amount: Double = 25.0,
+    val lookback_bars: Int = 180,
+    val expiry_bars: Int = 1
+)
+
+@JsonClass(generateAdapter = true)
+data class BacktestTradeSampleDto(
+    val timestamp: Long = 0L,
+    val direction: String = "CALL",
+    val entry_price: Double = 0.0,
+    val exit_price: Double = 0.0,
+    val pnl: Double = 0.0,
+    val status: String = "WON",
+    val market_regime: String = "UNKNOWN",
+    val strategy_name: String = ""
+) {
+    fun toDomain(): BacktestTradeSample = BacktestTradeSample(
+        timestampMillis = timestamp,
+        direction = direction,
+        entryPrice = entry_price,
+        exitPrice = exit_price,
+        pnl = pnl,
+        status = status,
+        marketRegime = market_regime,
+        strategyName = strategy_name
+    )
+}
+
+@JsonClass(generateAdapter = true)
+data class BacktestRunResponseDto(
+    val instrument: String = "EUR/USD",
+    val timeframe: String = "1m",
+    val strategy_id: String = "regime_adaptive",
+    val strategy_name: String = "Market Regime Adaptive",
+    val bars_evaluated: Int = 0,
+    val total_trades: Int = 0,
+    val wins: Int = 0,
+    val losses: Int = 0,
+    val win_rate_pct: Double = 0.0,
+    val net_pnl: Double = 0.0,
+    val gross_profit: Double = 0.0,
+    val gross_loss: Double = 0.0,
+    val profit_factor: Double = 0.0,
+    val max_drawdown: Double = 0.0,
+    val expectancy: Double = 0.0,
+    val equity_curve: List<Double> = emptyList(),
+    val simulated_trades: List<BacktestTradeSampleDto> = emptyList()
+) {
+    fun toDomain(): BacktestReport = BacktestReport(
+        instrument = instrument,
+        timeframe = timeframe,
+        strategyId = strategy_id,
+        strategyName = strategy_name,
+        barsEvaluated = bars_evaluated,
+        totalTrades = total_trades,
+        wins = wins,
+        losses = losses,
+        winRatePct = win_rate_pct,
+        netPnl = net_pnl,
+        grossProfit = gross_profit,
+        grossLoss = gross_loss,
+        profitFactor = profit_factor,
+        maxDrawdown = max_drawdown,
+        expectancy = expectancy,
+        equityCurve = equity_curve,
+        simulatedTrades = simulated_trades.map { it.toDomain() },
+        sourceLabel = "FastAPI Walk-Forward"
+    )
+}
+
+@JsonClass(generateAdapter = true)
+data class LiveReadinessGateDto(
+    val gate_id: String,
+    val step_number: Int = 1,
+    val title: String,
+    val passed: Boolean = false,
+    val detail: String = ""
+) {
+    fun toDomain(): LiveReadinessGateItem = LiveReadinessGateItem(
+        gateId = gate_id,
+        stepNumber = step_number,
+        title = title,
+        passed = passed,
+        detail = detail
+    )
+}
+
+@JsonClass(generateAdapter = true)
+data class LiveReadinessResponseDto(
+    val prerequisites_ready: Boolean = false,
+    val overall_ready: Boolean = false,
+    val current_mode: String = "SIMULATION",
+    val gates: List<LiveReadinessGateDto> = emptyList(),
+    val blocking_reasons: List<String> = emptyList(),
+    val evaluated_at: String = ""
+) {
+    fun toDomain(): LiveReadinessReport = LiveReadinessReport(
+        prerequisitesReady = prerequisites_ready,
+        overallReady = overall_ready,
+        currentMode = ExecutionMode.safeValueOf(current_mode),
+        gates = gates.map { it.toDomain() },
+        blockingReasons = blocking_reasons
+    )
+}
+
+@JsonClass(generateAdapter = true)
+data class DiagnosticCheckItemDto(
+    val check_id: String,
+    val title: String,
+    val status: String = "WARN",
+    val detail: String = ""
+) {
+    fun toDomain(): DiagnosticCheckItem = DiagnosticCheckItem(
+        checkId = check_id,
+        title = title,
+        status = DiagnosticCheckStatus.safeValueOf(status),
+        detail = detail
+    )
+}
+
+@JsonClass(generateAdapter = true)
+data class SystemDiagnosticsResponseDto(
+    val overall_status: String = "WARN",
+    val connector_name: String = "simulation_connector",
+    val connector_connected: Boolean = true,
+    val checks: List<DiagnosticCheckItemDto> = emptyList(),
+    val live_readiness: LiveReadinessResponseDto = LiveReadinessResponseDto(),
+    val checked_at: String = ""
+) {
+    fun toDomain(): SystemDiagnosticsReport = SystemDiagnosticsReport(
+        overallStatus = DiagnosticCheckStatus.safeValueOf(overall_status),
+        connectorName = connector_name,
+        connectorConnected = connector_connected,
+        checks = checks.map { it.toDomain() },
+        liveReadiness = live_readiness.toDomain()
+    )
+}
+

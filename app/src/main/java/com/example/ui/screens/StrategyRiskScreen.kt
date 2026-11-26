@@ -44,11 +44,14 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
+import com.example.model.BacktestReport
 import com.example.model.MlModelSummary
 import com.example.model.RiskPolicy
 import com.example.model.StrategyConfig
 import com.example.model.StrategyModuleSummary
 import com.example.model.StrategySelectionReport
+import com.example.model.Timeframe
+import com.example.ui.components.BacktestLabPanel
 import com.example.ui.components.MlGovernancePanel
 import com.example.ui.theme.LocalTradingColors
 import kotlin.math.roundToInt
@@ -74,6 +77,9 @@ fun StrategyRiskScreen(
     onSelectStrategyModule: (strategyId: String?, autoSelect: Boolean) -> Unit = { _, _ -> },
     onCheckMlDrift: (String) -> Unit = {},
     onRollbackMlModel: (String) -> Unit = {},
+    backtestReport: BacktestReport? = null,
+    isBacktestBusy: Boolean = false,
+    onRunBacktest: (instrument: String, timeframe: Timeframe, strategyId: String, stakeAmount: Double) -> Unit = { _, _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
@@ -121,20 +127,26 @@ fun StrategyRiskScreen(
             Tab(
                 selected = selectedTab == 0,
                 onClick = { selectedTab = 0 },
-                text = { Text("กลยุทธ์", fontWeight = FontWeight.SemiBold) },
+                text = { Text("กลยุทธ์", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, maxLines = 1) },
                 modifier = Modifier.testTag("tab_strategy_studio")
             )
             Tab(
                 selected = selectedTab == 1,
                 onClick = { selectedTab = 1 },
-                text = { Text("Risk Gate", fontWeight = FontWeight.SemiBold) },
+                text = { Text("Risk", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, maxLines = 1) },
                 modifier = Modifier.testTag("tab_risk_guardrails")
             )
             Tab(
                 selected = selectedTab == 2,
                 onClick = { selectedTab = 2 },
-                text = { Text("ML Models", fontWeight = FontWeight.SemiBold) },
+                text = { Text("ML", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, maxLines = 1) },
                 modifier = Modifier.testTag("tab_ml_models")
+            )
+            Tab(
+                selected = selectedTab == 3,
+                onClick = { selectedTab = 3 },
+                text = { Text("Backtest", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, maxLines = 1) },
+                modifier = Modifier.testTag("tab_backtest_lab")
             )
         }
 
@@ -325,7 +337,7 @@ fun StrategyRiskScreen(
                                     .height(50.dp)
                                     .testTag("save_strategy_button")
                             ) {
-                                Text("บันทึกกลยุทธ์และซิงค์ขึ้น Cloud", fontWeight = FontWeight.Bold)
+                                Text("บันทึกกลยุทธ์ลง SQLite", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -419,12 +431,12 @@ fun StrategyRiskScreen(
                                     .height(50.dp)
                                     .testTag("save_risk_policy_button")
                             ) {
-                                Text("บันทึกกฎจุดตัดขาดทุนและซิงค์ Cloud", fontWeight = FontWeight.Bold)
+                                Text("บันทึกกฎจุดตัดขาดทุนลง SQLite", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
                 }
-            } else {
+            } else if (selectedTab == 2) {
                 item {
                     MlGovernancePanel(
                         instrument = instrument,
@@ -437,6 +449,16 @@ fun StrategyRiskScreen(
                         onPromoteModel = onPromoteMlModel,
                         onCheckDrift = onCheckMlDrift,
                         onRollbackModel = onRollbackMlModel
+                    )
+                }
+            } else {
+                item {
+                    BacktestLabPanel(
+                        defaultInstrument = instrument,
+                        defaultStake = strategy.tradeAmount,
+                        report = backtestReport,
+                        isBusy = isBacktestBusy,
+                        onRunBacktest = onRunBacktest
                     )
                 }
             }

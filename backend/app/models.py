@@ -56,6 +56,8 @@ class OrderRecordModel(Base):
     error_detail: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     pnl: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    strategy_name: Mapped[str] = mapped_column(String(80), default="Market Regime Adaptive", nullable=False)
+    market_regime: Mapped[str] = mapped_column(String(32), default="UNKNOWN", nullable=False)
     date_key: Mapped[str] = mapped_column(String(10), index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)

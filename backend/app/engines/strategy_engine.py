@@ -243,6 +243,21 @@ class StrategySelectionEngine:
         return [t.strategy_id for t in _STRATEGY_TEMPLATES]
 
     @staticmethod
+    def get_template(strategy_id: str) -> Optional[_StrategyTemplate]:
+        return next((t for t in _STRATEGY_TEMPLATES if t.strategy_id == strategy_id), None)
+
+    @classmethod
+    def evaluate_bar_direction(
+        cls,
+        strategy_id: str,
+        window: List[Dict[str, float]],
+        cfg: Optional[StrategyConfig] = None,
+    ) -> TradeDirection:
+        tpl = cls.get_template(strategy_id)
+        effective_cfg = cfg or (tpl.default_config if tpl is not None else StrategyConfig())
+        return cls._strategy_bar_direction(strategy_id, window, effective_cfg)
+
+    @staticmethod
     def _compute_regime_fit(target_regimes: List[str], current_regime: MarketRegime) -> float:
         if current_regime == MarketRegime.UNKNOWN:
             return 0.40

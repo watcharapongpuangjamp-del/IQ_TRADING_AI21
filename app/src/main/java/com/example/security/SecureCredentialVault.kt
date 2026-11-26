@@ -100,6 +100,14 @@ class SecureCredentialVault(context: Context) {
 
     fun getTelegramBotToken(): String? = readEncryptedSecret(KEY_TELEGRAM_TOKEN)
 
+    fun verifyKeystoreReady(): Boolean = try {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateAesKey())
+        cipher.iv.isNotEmpty()
+    } catch (_: Exception) {
+        false
+    }
+
     private fun getOrCreateAesKey(): SecretKey {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         val existing = keyStore.getKey(KEY_ALIAS, null) as? SecretKey

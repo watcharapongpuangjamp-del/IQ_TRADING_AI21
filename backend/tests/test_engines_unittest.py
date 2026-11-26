@@ -13,6 +13,8 @@ from app.domain import (
     TradeDirection,
     TradeStatus,
 )
+from app.engines.backtest_engine import WalkForwardBacktestEngine
+from app.engines.learning_engine import LearningEvaluationEngine
 from app.engines.market_intelligence import MarketIntelligenceEngine
 from app.engines.multi_timeframe import MultiTimeframeEngine
 from app.engines.replay_engine import SimulatorReplayEngine
@@ -507,6 +509,81 @@ class TestPurePythonEngines(unittest.TestCase):
         self.assertAlmostEqual(report.live_win_rate, 0.10, places=4)
         self.assertEqual(report.drift_status, DriftStatus.DRIFT_DETECTED)
         self.assertTrue(report.recommend_rollback)
+
+    def test_phase8_mode_isolated_performance_analytics_and_breakdowns(self) -> None:
+        class FakeOrder:
+            def __init__(
+                self,
+                mode: str,
+                status: str,
+                pnl: float,
+                amount: float,
+                strategy_name: str,
+                market_regime: str,
+                instrument: str,
+                timeframe: str,
+                created_at: int,
+            ):
+                self.mode = mode
+                self.status = status
+                self.pnl = pnl
+                self.amount = amount
+                self.strategy_name = strategy_name
+                self.market_regime = market_regime
+                self.instrument = instrument
+                self.timeframe = timeframe
+                self.created_at = created_at
+
+        orders = [
+            FakeOrder("SIMULATION", "WON", 21.25, 25.0, "EMA Trend Following", "STRONG_TREND", "EUR/USD", "1m", 1),
+            FakeOrder("SIMULATION", "WON", 21.25, 25.0, "EMA Trend Following", "STRONG_TREND", "EUR/USD", "1m", 2),
+            FakeOrder("SIMULATION", "LOST", -25.0, 25.0, "RSI Reversal", "SIDEWAYS", "GBP/USD", "5m", 3),
+            FakeOrder("SIMULATION", "PENDING", 0.0, 25.0, "RSI Reversal", "SIDEWAYS", "GBP/USD", "5m", 4),
+            FakeOrder("LIVE", "LOST", -10.0, 10.0, "MACD Momentum", "BREAKOUT", "USD/JPY", "15m", 5),
+        ]
+
+        sim_report = LearningEvaluationEngine.build_performance_report(orders, mode_filter="SIMULATION")
+        self.assertEqual(sim_report["mode_filter"], "SIMULATION")
+        self.assertEqual(sim_report["simulation_summary"]["total_trades"], 3)
+        self.assertEqual(sim_report["live_summary"]["total_trades"], 1)
+        self.assertAlmostEqual(sim_report["active_summary"]["net_pnl"], 17.50, places=2)
+        self.assertAlmostEqual(sim_report["active_summary"]["gross_profit"], 42.50, places=2)
+        self.assertAlmostEqual(sim_report["active_summary"]["gross_loss"], 25.00, places=2)
+        self.assertAlmostEqual(sim_report["active_summary"]["profit_factor"], 1.70, places=2)
+        self.assertEqual(sim_report["active_summary"]["max_consecutive_wins"], 2)
+        self.assertEqual(sim_report["active_summary"]["max_consecutive_losses"], 1)
+
+        strat_labels = [row["label"] for row in sim_report["by_strategy"]]
+        self.assertEqual(strat_labels, ["EMA Trend Following", "RSI Reversal"])
+        self.assertNotIn("MACD Momentum", strat_labels)  # LIVE trade excluded from SIMULATION filter
+
+        regime_labels = {row["label"]: row for row in sim_report["by_regime"]}
+        self.assertIn("STRONG_TREND", regime_labels)
+        self.assertEqual(regime_labels["STRONG_TREND"]["wins"], 2)
+
+        live_report = LearningEvaluationEngine.build_performance_report(orders, mode_filter="LIVE")
+        self.assertEqual(live_report["active_summary"]["total_trades"], 1)
+        self.assertAlmostEqual(live_report["active_summary"]["net_pnl"], -10.0, places=2)
+
+    def test_phase8_walk_forward_backtest_engine_causal_execution(self) -> None:
+        candles = asyncio.run(self.connector.get_candles("EUR/USD", "1m", limit=160))
+        res = WalkForwardBacktestEngine.run_backtest(
+            candles=candles,
+            instrument="EUR/USD",
+            timeframe="1m",
+            strategy_id="ema_trend_following",
+            stake_amount=25.0,
+            payout_rate=0.85,
+            expiry_bars=1,
+        )
+        self.assertEqual(res["instrument"], "EUR/USD")
+        self.assertEqual(res["strategy_id"], "ema_trend_following")
+        self.assertEqual(res["bars_evaluated"], 160)
+        self.assertGreaterEqual(len(res["equity_curve"]), 1)
+        self.assertEqual(res["wins"] + res["losses"], res["total_trades"])
+        for trade in res["simulated_trades"]:
+            self.assertIn(trade["direction"], ("CALL", "PUT"))
+            self.assertIn(trade["status"], ("WON", "LOST"))
 
 
 if __name__ == "__main__":

@@ -45,8 +45,10 @@ import com.example.model.BackendOrderSummary
 import com.example.model.DailyPnLSummary
 import com.example.model.OrderLifecycleEvent
 import com.example.model.OrderLifecycleState
+import com.example.model.PerformanceAnalyticsReport
 import com.example.model.TradeRecord
 import com.example.model.TradeStatus
+import com.example.ui.components.PerformanceAnalyticsPanel
 import com.example.ui.theme.LocalTradingColors
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -58,6 +60,9 @@ fun PnLDashboardScreen(
     dailySummaries: List<DailyPnLSummary>,
     trades: List<TradeRecord>,
     todayDateKey: String,
+    performanceReport: PerformanceAnalyticsReport = PerformanceAnalyticsReport(),
+    analyticsModeFilter: String = "SIMULATION",
+    onSelectAnalyticsMode: (String) -> Unit = {},
     backendOrders: List<BackendOrderSummary> = emptyList(),
     selectedOrderEvents: List<OrderLifecycleEvent> = emptyList(),
     isReconciling: Boolean = false,
@@ -187,6 +192,15 @@ fun PnLDashboardScreen(
                     }
                 }
             }
+        }
+
+        // Phase 8: Mode-Isolated Performance Analytics & Breakdowns
+        item {
+            PerformanceAnalyticsPanel(
+                report = performanceReport,
+                selectedModeFilter = analyticsModeFilter,
+                onSelectModeFilter = onSelectAnalyticsMode
+            )
         }
 
         // Backend Execution Lifecycle & Reconciliation Section

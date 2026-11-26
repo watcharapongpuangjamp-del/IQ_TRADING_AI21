@@ -9,21 +9,28 @@ import com.example.data.remote.OrderSubmitRequestDto
 import com.example.data.remote.ReplayEvaluationResponseDto
 import com.example.data.remote.TelegramNotifier
 import com.example.data.repository.LocalTradingRepository
+import com.example.engine.LiveReadinessEvaluator
+import com.example.engine.LocalBacktestEngine
 import com.example.engine.LocalStrategySelectorEngine
 import com.example.engine.MarketSimulationEngine
 import com.example.engine.MultiTimeframeLocalEngine
+import com.example.engine.PerformanceAnalyticsEngine
 import com.example.engine.RiskManagementEngine
 import com.example.engine.SignalEngine
+import com.example.engine.SystemDiagnosticsRunner
 import com.example.engine.TechnicalAnalysisEngine
 import com.example.model.BackendHealthState
 import com.example.model.BackendOrderSummary
+import com.example.model.BacktestReport
 import com.example.model.Candle
 import com.example.model.DailyPnLSummary
 import com.example.model.DataQualitySummary
+import com.example.model.DiagnosticCheckStatus
 import com.example.model.DriftStatus
 import com.example.model.ExecutionMode
 import com.example.model.ExecutionStage
 import com.example.model.IntegrationSettings
+import com.example.model.LiveReadinessReport
 import com.example.model.LocalDatabaseStats
 import com.example.model.MarketRegime
 import com.example.model.MlDriftReport
@@ -31,6 +38,7 @@ import com.example.model.MlModelSummary
 import com.example.model.MultiTimeframeReport
 import com.example.model.OrderLifecycleEvent
 import com.example.model.OrderLifecycleState
+import com.example.model.PerformanceAnalyticsReport
 import com.example.model.ReplaySessionState
 import com.example.model.RiskPolicy
 import com.example.model.RiskValidationResult
@@ -39,6 +47,7 @@ import com.example.model.SignalAnalysis
 import com.example.model.StrategyConfig
 import com.example.model.StrategySelectionReport
 import com.example.model.StreamTransportMode
+import com.example.model.SystemDiagnosticsReport
 import com.example.model.TechnicalSnapshot
 import com.example.model.Timeframe
 import com.example.model.TradeDirection
@@ -56,6 +65,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -172,6 +182,49 @@ class TradingViewModel(
             .map<List<DailyPnLSummary>, LocalUiState<List<DailyPnLSummary>>> { LocalUiState.Success(it) }
             .catch { emit(LocalUiState.Error(unwrapSqlError(it, "โหลดสรุปผลรายวัน SQLite ไม่สำเร็จ"))) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LocalUiState.Loading)
+
+    private val _analyticsModeFilter = MutableStateFlow("SIMULATION")
+    val analyticsModeFilter: StateFlow<String> = _analyticsModeFilter.asStateFlow()
+
+    val performanceReport: StateFlow<PerformanceAnalyticsReport> =
+        combine(tradesState, _analyticsModeFilter) { state, filter ->
+            val settledOrAll = (state as? LocalUiState.Success)?.data.orEmpty()
+            PerformanceAnalyticsEngine.buildReport(settledOrAll, filter)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), PerformanceAnalyticsReport())
+
+    private val _backtestReport = MutableStateFlow<BacktestReport?>(null)
+    val backtestReport: StateFlow<BacktestReport?> = _backtestReport.asStateFlow()
+
+    private val _isBacktestBusy = MutableStateFlow(false)
+    val isBacktestBusy: StateFlow<Boolean> = _isBacktestBusy.asStateFlow()
+
+    private val _diagnosticsReport = MutableStateFlow<SystemDiagnosticsReport?>(null)
+    val diagnosticsReport: StateFlow<SystemDiagnosticsReport?> = _diagnosticsReport.asStateFlow()
+
+    private val _isDiagnosticsBusy = MutableStateFlow(false)
+    val isDiagnosticsBusy: StateFlow<Boolean> = _isDiagnosticsBusy.asStateFlow()
+
+    val liveReadinessReport: StateFlow<LiveReadinessReport> =
+        combine(
+            _backendHealth,
+            riskPolicyState,
+            integrationSettings,
+            _terminalState,
+            profileState
+        ) { health, riskUi, settings, term, profUi ->
+            val policy = (riskUi as? LocalUiState.Success)?.data ?: RiskPolicy(userId = currentUserId)
+            val mode = ExecutionMode.safeValueOf((profUi as? LocalUiState.Success)?.data?.executionMode)
+            val dq = term.dataQuality ?: DataQualitySummary(valid = false, reason = "รอข้อมูลแท่งเทียน")
+            LiveReadinessEvaluator.evaluateLocal(
+                backendHealth = health,
+                riskPolicy = policy,
+                settings = settings,
+                dataQuality = dq,
+                unresolvedOrdersCount = term.unresolvedOrdersCount,
+                currentMode = mode,
+                ownerConfirmed = mode == ExecutionMode.LIVE
+            )
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LiveReadinessReport())
 
     private var marketFeedJob: Job? = null
     private var localReplayBuffer: List<Candle> = emptyList()
@@ -810,6 +863,7 @@ class TradingViewModel(
                         status = TradeStatus.toNormalizedStatus(lifecycle.name),
                         pnl = 0.0,
                         strategyName = strategy.name,
+                        marketRegime = snapshot.regime.name,
                         confidenceScore = currentSignal.confidenceScore,
                         calibratedProbability = currentSignal.calibratedProbability,
                         explanation = "${currentSignal.explanation} [Corr: ${dto.correlation_id} | State: ${lifecycle.name}]"
@@ -853,6 +907,7 @@ class TradingViewModel(
                     status = TradeStatus.toNormalizedStatus(finalStatus.name),
                     pnl = dto.pnl,
                     strategyName = strategy.name,
+                    marketRegime = snapshot.regime.name,
                     confidenceScore = currentSignal.confidenceScore,
                     calibratedProbability = currentSignal.calibratedProbability,
                     explanation = "${currentSignal.explanation} [Corr: ${dto.correlation_id}]"
@@ -898,6 +953,7 @@ class TradingViewModel(
                 status = TradeStatus.OPEN.name,
                 pnl = 0.0,
                 strategyName = strategy.name,
+                marketRegime = snapshot.regime.name,
                 confidenceScore = currentSignal.confidenceScore,
                 calibratedProbability = currentSignal.calibratedProbability,
                 explanation = currentSignal.explanation
@@ -1323,15 +1379,36 @@ class TradingViewModel(
         }
     }
 
-    fun switchExecutionMode(targetMode: ExecutionMode) {
+    fun switchExecutionMode(targetMode: ExecutionMode, explicitLiveConfirmation: Boolean = false) {
         viewModelScope.launch {
-            if (targetMode == ExecutionMode.LIVE && !_backendHealth.value.liveAuthorized) {
-                _snackbarMessage.value = "โหมด LIVE ถูกล็อก: ต้องเชื่อมต่อและยืนยัน FastAPI Connector ก่อน"
-                return@launch
+            if (targetMode == ExecutionMode.LIVE) {
+                val gateReport = LiveReadinessEvaluator.evaluateLocal(
+                    backendHealth = _backendHealth.value,
+                    riskPolicy = currentRiskPolicy(),
+                    settings = integrationSettings.value,
+                    dataQuality = _terminalState.value.dataQuality
+                        ?: DataQualitySummary(valid = false, reason = "ไม่มีข้อมูลตลาด"),
+                    unresolvedOrdersCount = _terminalState.value.unresolvedOrdersCount,
+                    currentMode = currentExecutionMode(),
+                    ownerConfirmed = explicitLiveConfirmation
+                )
+                if (!gateReport.prerequisitesReady) {
+                    _snackbarMessage.value = "โหมด LIVE ถูกล็อก: ${gateReport.blockingReasons.firstOrNull() ?: "ยังไม่ผ่าน Live Readiness Gate"}"
+                    return@launch
+                }
+                if (!explicitLiveConfirmation) {
+                    _snackbarMessage.value = "กรุณายืนยันผ่านกล่อง Live Readiness 2 ขั้นตอนก่อนเปิดโหมด LIVE"
+                    return@launch
+                }
             }
             val baseUrl = integrationSettings.value.backendBaseUrl
             if (backendClient.isValidHttpUrl(baseUrl) && _backendHealth.value.connected) {
-                val res = backendClient.switchMode(baseUrl, credentialVault.getBackendToken(), targetMode, false)
+                val res = backendClient.switchMode(
+                    baseUrl = baseUrl,
+                    bearerToken = credentialVault.getBackendToken(),
+                    mode = targetMode,
+                    explicitLiveConfirmation = explicitLiveConfirmation
+                )
                 if (res.isFailure) {
                     _snackbarMessage.value = "Backend ปฏิเสธการสลับโหมด: ${res.exceptionOrNull()?.localizedMessage}"
                     return@launch
@@ -1339,6 +1416,122 @@ class TradingViewModel(
             }
             localRepository.updateUserBalanceAndMode(currentUserId, currentBalance(), targetMode, markSavedTimestamp = true)
                 .onSuccess { _snackbarMessage.value = "สลับโหมดเป็น ${targetMode.label} แล้ว" }
+        }
+    }
+
+    // --- Phase 8: Performance Mode Filter, Backtesting & System Diagnostics ---
+
+    fun setAnalyticsModeFilter(mode: String) {
+        _analyticsModeFilter.value = mode
+        viewModelScope.launch {
+            val baseUrl = integrationSettings.value.backendBaseUrl
+            if (_backendHealth.value.connected && backendClient.isValidHttpUrl(baseUrl)) {
+                backendClient.fetchTradingPerformance(baseUrl, credentialVault.getBackendToken(), mode)
+            }
+        }
+    }
+
+    fun runWalkForwardBacktest(
+        instrument: String,
+        timeframe: Timeframe,
+        strategyId: String,
+        stakeAmount: Double
+    ) {
+        viewModelScope.launch {
+            _isBacktestBusy.value = true
+            val baseUrl = integrationSettings.value.backendBaseUrl
+            val token = credentialVault.getBackendToken()
+            if (_backendHealth.value.connected && backendClient.isValidHttpUrl(baseUrl)) {
+                val remote = backendClient.runBacktest(
+                    baseUrl = baseUrl,
+                    bearerToken = token,
+                    instrument = instrument,
+                    timeframe = timeframe.code,
+                    strategyId = strategyId,
+                    stakeAmount = stakeAmount,
+                    lookbackBars = 180
+                )
+                if (remote.isSuccess) {
+                    _backtestReport.value = remote.getOrNull()
+                    _isBacktestBusy.value = false
+                    _snackbarMessage.value = "รัน Walk-Forward Backtest (FastAPI) เสร็จสิ้น"
+                    return@launch
+                }
+            }
+
+            val localCandles = if (_terminalState.value.selectedInstrument == instrument &&
+                _terminalState.value.selectedTimeframe == timeframe &&
+                _terminalState.value.candles.size >= 80
+            ) {
+                _terminalState.value.candles
+            } else {
+                simEngine.generateInitialCandles(instrument, timeframe.defaultExpirySec, 180)
+            }
+            val spec = SUPPORTED_INSTRUMENTS.firstOrNull { it.symbol == instrument } ?: SUPPORTED_INSTRUMENTS.first()
+            LocalBacktestEngine.runBacktest(
+                candles = localCandles,
+                instrument = instrument,
+                timeframe = timeframe.code,
+                strategyId = strategyId,
+                stakeAmount = stakeAmount,
+                payoutRate = spec.payoutRate
+            ).onSuccess { report ->
+                _backtestReport.value = report
+                _snackbarMessage.value = "รัน Backtest บนข้อมูล Local SQLite (${report.totalTrades} ไม้) เสร็จสิ้น"
+            }.onFailure { err ->
+                _snackbarMessage.value = "Backtest ไม่สำเร็จ: ${err.localizedMessage}"
+            }
+            _isBacktestBusy.value = false
+        }
+    }
+
+    fun runSystemDiagnostics() {
+        viewModelScope.launch {
+            _isDiagnosticsBusy.value = true
+            val vaultOk = credentialVault.verifyKeystoreReady()
+            val term = _terminalState.value
+            val dq = term.dataQuality ?: MultiTimeframeLocalEngine.inspectDataQuality(term.candles)
+            val localReport = SystemDiagnosticsRunner.runLocalDiagnostics(
+                dbStats = databaseStats.value,
+                candles = term.candles,
+                dataQuality = dq,
+                riskPolicy = currentRiskPolicy(),
+                backendHealth = _backendHealth.value,
+                wsState = term.wsState,
+                settings = integrationSettings.value,
+                activeMlModel = _activeMlModel.value,
+                unresolvedOrdersCount = term.unresolvedOrdersCount,
+                currentMode = currentExecutionMode(),
+                vaultRoundTripOk = vaultOk
+            )
+
+            val baseUrl = integrationSettings.value.backendBaseUrl
+            val finalReport = if (_backendHealth.value.connected && backendClient.isValidHttpUrl(baseUrl)) {
+                val remote = backendClient.fetchSystemDiagnostics(
+                    baseUrl = baseUrl,
+                    bearerToken = credentialVault.getBackendToken(),
+                    instrument = term.selectedInstrument,
+                    timeframe = term.selectedTimeframe.code
+                ).getOrNull()
+                if (remote != null) {
+                    val localOnly = localReport.checks.filter { it.checkId in setOf("local_sqlite", "keystore_vault", "risk_fail_closed") }
+                    val mergedChecks = localOnly + remote.checks.filterNot { r -> localOnly.any { it.checkId == r.checkId } }
+                    val overall = when {
+                        mergedChecks.any { it.status == DiagnosticCheckStatus.FAIL } -> DiagnosticCheckStatus.FAIL
+                        mergedChecks.any { it.status == DiagnosticCheckStatus.WARN } -> DiagnosticCheckStatus.WARN
+                        else -> DiagnosticCheckStatus.PASS
+                    }
+                    remote.copy(overallStatus = overall, checks = mergedChecks)
+                } else {
+                    localReport
+                }
+            } else {
+                localReport
+            }
+
+            _diagnosticsReport.value = finalReport
+            _isDiagnosticsBusy.value = false
+            _snackbarMessage.value = "ตรวจ System Diagnostics เสร็จสิ้น: ${finalReport.overallStatus.label}"
         }
     }
 

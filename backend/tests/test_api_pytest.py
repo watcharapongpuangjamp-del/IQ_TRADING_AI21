@@ -568,3 +568,62 @@ def test_phase7_random_forest_dataset_version_drift_check_and_manual_rollback(cl
     active_now = client.get("/api/v1/ml/active", params={"instrument": "EUR/USD", "timeframe": "1m"}).json()
     assert active_now["model_id"] == rf_model["model_id"]
 
+
+def test_phase8_performance_backtest_diagnostics_and_five_step_live_gate(client: TestClient) -> None:
+    # 1. Submit a simulation order and inspect mode-isolated performance report
+    order_res = client.post(
+        "/api/v1/orders",
+        json={
+            "instrument": "EUR/USD",
+            "timeframe": "1m",
+            "direction": "CALL",
+            "amount": 25.0,
+            "expiry_seconds": 60,
+            "mode": "SIMULATION",
+            "idempotency_key": "idem-phase8-perf-001",
+        },
+    )
+    assert order_res.status_code == 200
+
+    perf_sim = client.get("/api/v1/trading/performance", params={"mode": "SIMULATION"})
+    assert perf_sim.status_code == 200
+    sim_body = perf_sim.json()
+    assert sim_body["mode_filter"] == "SIMULATION"
+    assert sim_body["simulation_summary"]["total_trades"] >= 1
+    assert sim_body["live_summary"]["total_trades"] == 0
+    assert len(sim_body["by_asset"]) >= 1
+    assert len(sim_body["by_regime"]) >= 1
+
+    # 2. Walk-forward backtest endpoint
+    bt_res = client.post(
+        "/api/v1/backtest/run",
+        json={
+            "instrument": "EUR/USD",
+            "timeframe": "1m",
+            "strategy_id": "regime_adaptive",
+            "stake_amount": 25.0,
+            "lookback_bars": 120,
+            "expiry_bars": 1,
+        },
+    )
+    assert bt_res.status_code == 200
+    bt_body = bt_res.json()
+    assert bt_body["bars_evaluated"] == 120
+    assert bt_body["wins"] + bt_body["losses"] == bt_body["total_trades"]
+
+    # 3. System diagnostics and 5-step live readiness gate
+    diag_res = client.get("/api/v1/system/diagnostics", params={"instrument": "EUR/USD", "timeframe": "1m"})
+    assert diag_res.status_code == 200
+    diag = diag_res.json()
+    assert diag["overall_status"] in ("PASS", "WARN", "FAIL")
+    assert len(diag["checks"]) >= 5
+    gates = diag["live_readiness"]["gates"]
+    assert len(gates) == 5
+    assert diag["live_readiness"]["overall_ready"] is False
+    assert diag["live_readiness"]["current_mode"] == "SIMULATION"
+
+    readiness_res = client.get("/api/v1/trading/live-readiness")
+    assert readiness_res.status_code == 200
+    assert len(readiness_res.json()["gates"]) == 5
+
+

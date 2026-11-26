@@ -43,6 +43,7 @@ data class LocalTradeCacheEntity(
     val status: String,
     val pnl: Double,
     val strategyName: String,
+    val marketRegime: String = "UNKNOWN",
     val confidenceScore: Int,
     val calibratedProbability: Double,
     val explanation: String,
@@ -209,7 +210,7 @@ interface TradingDao {
         LocalRiskPolicyEntity::class,
         LocalDailySummaryEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class TradingDatabase : RoomDatabase() {
@@ -337,6 +338,14 @@ abstract class TradingDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `local_trade_logs` ADD COLUMN `marketRegime` TEXT NOT NULL DEFAULT 'UNKNOWN'"
+                )
+            }
+        }
+
         @Volatile
         private var INSTANCE: TradingDatabase? = null
 
@@ -347,7 +356,7 @@ abstract class TradingDatabase : RoomDatabase() {
                     TradingDatabase::class.java,
                     DATABASE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { INSTANCE = it }
             }

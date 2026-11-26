@@ -170,6 +170,13 @@ private fun LocalTradingShell(
     val isMlBusy by viewModel.isMlBusy.collectAsStateWithLifecycle()
     val backendOrders by viewModel.backendOrders.collectAsStateWithLifecycle()
     val selectedOrderEvents by viewModel.selectedOrderEvents.collectAsStateWithLifecycle()
+    val analyticsModeFilter by viewModel.analyticsModeFilter.collectAsStateWithLifecycle()
+    val performanceReport by viewModel.performanceReport.collectAsStateWithLifecycle()
+    val backtestReport by viewModel.backtestReport.collectAsStateWithLifecycle()
+    val isBacktestBusy by viewModel.isBacktestBusy.collectAsStateWithLifecycle()
+    val diagnosticsReport by viewModel.diagnosticsReport.collectAsStateWithLifecycle()
+    val isDiagnosticsBusy by viewModel.isDiagnosticsBusy.collectAsStateWithLifecycle()
+    val liveReadinessReport by viewModel.liveReadinessReport.collectAsStateWithLifecycle()
 
     LaunchedEffect(snackbarMessage) {
         val msg = snackbarMessage
@@ -335,7 +342,10 @@ private fun LocalTradingShell(
                                 onRefreshStrategies = viewModel::refreshStrategyModules,
                                 onSelectStrategyModule = viewModel::selectStrategyModule,
                                 onCheckMlDrift = viewModel::checkMlModelDrift,
-                                onRollbackMlModel = { targetId -> viewModel.rollbackMlModel(targetId) }
+                                onRollbackMlModel = { targetId -> viewModel.rollbackMlModel(targetId) },
+                                backtestReport = backtestReport,
+                                isBacktestBusy = isBacktestBusy,
+                                onRunBacktest = viewModel::runWalkForwardBacktest
                             )
                         }
                         composable(NavRoutes.PNL) {
@@ -343,6 +353,9 @@ private fun LocalTradingShell(
                                 dailySummaries = dailySummaries,
                                 trades = trades,
                                 todayDateKey = todayDateKey,
+                                performanceReport = performanceReport,
+                                analyticsModeFilter = analyticsModeFilter,
+                                onSelectAnalyticsMode = viewModel::setAnalyticsModeFilter,
                                 backendOrders = backendOrders,
                                 selectedOrderEvents = selectedOrderEvents,
                                 isReconciling = terminalState.isReconciling,
@@ -357,6 +370,11 @@ private fun LocalTradingShell(
                                 databaseStats = databaseStats,
                                 settings = integrationSettings,
                                 backendHealth = backendHealth,
+                                riskPolicy = riskPolicy,
+                                liveReadiness = liveReadinessReport,
+                                diagnosticsReport = diagnosticsReport,
+                                isDiagnosticsBusy = isDiagnosticsBusy,
+                                onRunDiagnostics = viewModel::runSystemDiagnostics,
                                 onSwitchMode = viewModel::switchExecutionMode,
                                 onResetBalance = viewModel::resetSimulationBalance,
                                 onSaveIntegrations = viewModel::saveIntegrationsAndTestBackend,

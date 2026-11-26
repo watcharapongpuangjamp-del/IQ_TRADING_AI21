@@ -558,3 +558,115 @@ class SelectStrategyRequest(BaseModel):
     instrument: str = Field(default="EUR/USD", min_length=3, max_length=20)
     timeframe: str = Field(default="1m", pattern="^(1m|5m|15m)$")
 
+
+class PerformanceBreakdownRowSchema(BaseModel):
+    label: str
+    total_trades: int
+    wins: int
+    losses: int
+    win_rate_pct: float
+    net_pnl: float
+    profit_factor: float
+
+
+class ModePerformanceSummarySchema(BaseModel):
+    mode: str
+    total_trades: int
+    wins: int
+    losses: int
+    win_rate_pct: float
+    net_pnl: float
+    gross_profit: float
+    gross_loss: float
+    profit_factor: float
+    average_return_pct: float
+    max_drawdown: float
+    max_consecutive_wins: int
+    max_consecutive_losses: int
+    expectancy: float
+
+
+class TradingPerformanceResponse(BaseModel):
+    mode_filter: str
+    simulation_summary: ModePerformanceSummarySchema
+    live_summary: ModePerformanceSummarySchema
+    active_summary: ModePerformanceSummarySchema
+    by_strategy: List[PerformanceBreakdownRowSchema]
+    by_regime: List[PerformanceBreakdownRowSchema]
+    by_asset: List[PerformanceBreakdownRowSchema]
+    by_timeframe: List[PerformanceBreakdownRowSchema]
+
+
+class BacktestRunRequest(BaseModel):
+    instrument: str = Field(default="EUR/USD", min_length=3, max_length=20)
+    timeframe: str = Field(default="1m", pattern="^(1m|5m|15m)$")
+    strategy_id: str = Field(default="regime_adaptive", min_length=2, max_length=64)
+    stake_amount: float = Field(default=25.0, ge=1.0, le=100_000.0)
+    lookback_bars: int = Field(default=180, ge=60, le=600)
+    expiry_bars: int = Field(default=1, ge=1, le=5)
+
+
+class BacktestTradeSampleSchema(BaseModel):
+    timestamp: int
+    direction: str
+    entry_price: float
+    exit_price: float
+    pnl: float
+    status: str
+    market_regime: str
+    strategy_name: str
+
+
+class BacktestRunResponse(BaseModel):
+    instrument: str
+    timeframe: str
+    strategy_id: str
+    strategy_name: str
+    bars_evaluated: int
+    total_trades: int
+    wins: int
+    losses: int
+    win_rate_pct: float
+    net_pnl: float
+    gross_profit: float
+    gross_loss: float
+    profit_factor: float
+    max_drawdown: float
+    expectancy: float
+    equity_curve: List[float]
+    simulated_trades: List[BacktestTradeSampleSchema]
+
+
+class LiveReadinessGateSchema(BaseModel):
+    gate_id: str
+    step_number: int
+    title: str
+    passed: bool
+    detail: str
+
+
+class LiveReadinessResponse(BaseModel):
+    prerequisites_ready: bool
+    overall_ready: bool
+    current_mode: str
+    gates: List[LiveReadinessGateSchema]
+    blocking_reasons: List[str]
+    evaluated_at: datetime
+
+
+class DiagnosticCheckItemSchema(BaseModel):
+    check_id: str
+    title: str
+    status: str
+    detail: str
+
+
+class SystemDiagnosticsResponse(BaseModel):
+    overall_status: str
+    connector_name: str
+    connector_connected: bool
+    checks: List[DiagnosticCheckItemSchema]
+    live_readiness: LiveReadinessResponse
+    checked_at: datetime
+
+
