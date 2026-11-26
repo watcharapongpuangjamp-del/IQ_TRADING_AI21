@@ -17,6 +17,7 @@ from app.domain import (
 from app.engines.backtest_engine import WalkForwardBacktestEngine
 from app.engines.broker_dry_run import run_broker_dry_run_probe, verify_bearer_credentials
 from app.engines.iqair_client import IQAirClient
+from app.connectors.iqoption_broker import IQOptionBrokerConnector
 from app.engines.learning_engine import LearningEvaluationEngine
 from app.engines.market_intelligence import MarketIntelligenceEngine
 from app.engines.multi_timeframe import MultiTimeframeEngine
@@ -833,6 +834,23 @@ class TestPurePythonEngines(unittest.TestCase):
         self.assertTrue(res["success"])
         self.assertIn("aqi_us", res)
         self.assertIn("macro_impact_score", res)
+
+    def test_iqoption_broker_connector(self):
+        connector = IQOptionBrokerConnector(email="test@iqoption.com", password="demo", balance_mode="PRACTICE", initial_balance=10000.0)
+        async def run_test():
+            self.assertTrue(await connector.connect())
+            self.assertTrue(connector.connected)
+            self.assertFalse(connector.live_authorized)
+            balance = await connector.get_balance()
+            self.assertEqual(balance, 10000.0)
+            candles = await connector.get_candles("EUR/USD", "1m", limit=30)
+            self.assertEqual(len(candles), 30)
+            order = await connector.submit_order("EUR/USD", "1m", "CALL", 50.0, 60, "corr_123")
+            self.assertEqual(order.status, "SETTLED")
+            self.assertIsNotNone(order.broker_order_id)
+            await connector.disconnect()
+            self.assertFalse(connector.connected)
+        asyncio.run(run_test())
 
 
 if __name__ == "__main__":

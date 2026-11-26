@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     broker_base_url: str = ""
     broker_api_token: str = ""
     broker_timeout_seconds: float = 10.0
+    iqair_api_key: str = ""
+    iqoption_email: str = ""
+    iqoption_password: str = ""
+    iqoption_balance_mode: str = "PRACTICE"
 
 
 @lru_cache

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.connectors.http_broker import HttpBrokerConnector
+from app.connectors.iqoption_broker import IQOptionBrokerConnector
 from app.connectors.simulation import INSTRUMENT_SPECS, SimulationConnector
 from app.database import SessionLocal, engine, ensure_schema_migrations, get_db
 from app.engines.backtest_engine import WalkForwardBacktestEngine
@@ -90,12 +91,20 @@ def seed_initial_records(db: Session) -> None:
 
 def create_app(custom_settings: Settings | None = None) -> FastAPI:
     settings = custom_settings or get_settings()
-    if settings.broker_adapter.strip().lower() == "http":
+    adapter_type = settings.broker_adapter.strip().lower()
+    if adapter_type == "http":
         connector = HttpBrokerConnector(
             base_url=settings.broker_base_url,
             api_token=settings.broker_api_token,
             timeout_seconds=settings.broker_timeout_seconds,
             allow_live=settings.allow_live_trading,
+        )
+    elif adapter_type == "iqoption":
+        connector = IQOptionBrokerConnector(
+            email=settings.iqoption_email,
+            password=settings.iqoption_password,
+            balance_mode=settings.iqoption_balance_mode,
+            initial_balance=10000.0,
         )
     else:
         connector = SimulationConnector(initial_balance=10000.0)
