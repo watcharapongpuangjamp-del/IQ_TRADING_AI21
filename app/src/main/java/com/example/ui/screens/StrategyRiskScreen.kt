@@ -72,6 +72,8 @@ fun StrategyRiskScreen(
     isStrategyBusy: Boolean = false,
     onRefreshStrategies: () -> Unit = {},
     onSelectStrategyModule: (strategyId: String?, autoSelect: Boolean) -> Unit = { _, _ -> },
+    onCheckMlDrift: (String) -> Unit = {},
+    onRollbackMlModel: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
@@ -432,7 +434,9 @@ fun StrategyRiskScreen(
                         isBusy = isMlBusy,
                         onRefreshModels = onRefreshMlModels,
                         onTrainModel = onTrainMlModel,
-                        onPromoteModel = onPromoteMlModel
+                        onPromoteModel = onPromoteMlModel,
+                        onCheckDrift = onCheckMlDrift,
+                        onRollbackModel = onRollbackMlModel
                     )
                 }
             }

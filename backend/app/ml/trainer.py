@@ -5,13 +5,14 @@ import uuid
 
 import joblib
 import numpy as np
-from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from app.domain import ModelStatus, StrategyConfig
 from app.ml.backtesting import BacktestReport, WalkForwardBacktester
+from app.ml.drift import compute_feature_baseline, dumps_baseline_stats
 from app.ml.features import FEATURE_NAMES, FeatureEngineeringEngine
 from app.ml.splitting import ChronologicalSplitter
 
@@ -36,6 +37,9 @@ class TrainingOutcome:
     backtest_report: BacktestReport
     artifact_filename: str
     validation_notes: str
+    dataset_version: str = "ds_v2_unknown"
+    feature_count: int = len(FEATURE_NAMES)
+    baseline_stats_json: str = "{}"
 
 
 class PlattCalibratedBundle:
@@ -84,10 +88,21 @@ class ModelTrainer:
                 random_state=42,
             )
             return Pipeline([("scaler", StandardScaler()), ("clf", clf)])
+        if algorithm == "random_forest":
+            clf = RandomForestClassifier(
+                n_estimators=120,
+                max_depth=6,
+                min_samples_leaf=10,
+                random_state=42,
+                n_jobs=-1,
+            )
+            return Pipeline([("scaler", StandardScaler()), ("clf", clf)])
         if algorithm == "logistic_regression":
             clf = LogisticRegression(C=1.0, max_iter=500, random_state=42)
             return Pipeline([("scaler", StandardScaler()), ("clf", clf)])
-        raise ValueError(f"Unsupported algorithm '{algorithm}'. Use 'logistic_regression' or 'hist_gradient_boosting'.")
+        raise ValueError(
+            f"Unsupported algorithm '{algorithm}'. Use 'logistic_regression', 'hist_gradient_boosting', or 'random_forest'."
+        )
 
     @classmethod
     def _fit_calibrated_bundle(
@@ -138,6 +153,10 @@ class ModelTrainer:
             horizon_bars=1,
             execution_delay_bars=execution_delay_bars,
         )
+        dataset_version = FeatureEngineeringEngine.compute_dataset_version(
+            candles_1m=candles_1m,
+            feature_names=dataset.feature_names,
+        )
 
         X_all = np.asarray(dataset.features, dtype=float)
         y_all = np.asarray(dataset.labels, dtype=int)
@@ -187,6 +206,11 @@ class ModelTrainer:
             algorithm=algorithm,
         )
 
+        # Compute training baseline statistics for future drift detection (no leakage)
+        train_rows = [dataset.features[i] for i in split.train_indices]
+        baseline_stats = compute_feature_baseline(train_rows, dataset.feature_names)
+        baseline_stats_json = dumps_baseline_stats(baseline_stats)
+
         # 3. Apply Out-of-Sample Walk-Forward Validation Gate (never auto-deploy to ACTIVE)
         reasons: List[str] = []
         if wf_report.brier_score > gate.max_brier_score:
@@ -198,11 +222,11 @@ class ModelTrainer:
 
         if reasons:
             status = ModelStatus.REJECTED
-            notes = "Rejected by walk-forward gate: " + "; ".join(reasons)
+            notes = f"[{dataset_version}] Rejected by walk-forward gate: " + "; ".join(reasons)
         else:
             status = ModelStatus.VALIDATED
             notes = (
-                f"Passed walk-forward gate ({len(folds)} folds): "
+                f"[{dataset_version}] Passed walk-forward gate ({len(folds)} folds): "
                 f"OOS Acc={wf_report.accuracy:.3f}, Brier={wf_report.brier_score:.4f}, ECE={wf_report.ece:.4f}"
             )
 
@@ -227,5 +251,8 @@ class ModelTrainer:
             test_samples=len(oos_labels),
             backtest_report=wf_report,
             artifact_filename=artifact_filename,
-            validation_notes=notes,
+            validation_notes=notes[:512],
+            dataset_version=dataset_version,
+            feature_count=len(dataset.feature_names),
+            baseline_stats_json=baseline_stats_json,
         )

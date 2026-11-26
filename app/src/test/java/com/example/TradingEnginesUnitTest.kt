@@ -404,5 +404,100 @@ class TradingEnginesUnitTest {
         assertEquals(1, parsedSys?.unresolved_orders_count)
         assertTrue(parsedSys?.auto_select_strategy == true)
     }
+
+    @Test
+    fun phase7_mlDriftDtoParsing_datasetVersion_andSystemWsAlert() {
+        assertEquals(
+            com.example.model.DriftStatus.DRIFT_DETECTED,
+            com.example.model.DriftStatus.safeValueOf("DRIFT_DETECTED")
+        )
+        assertEquals(
+            com.example.model.DriftStatus.WARNING,
+            com.example.model.DriftStatus.safeValueOf("warning")
+        )
+        assertEquals(
+            com.example.model.DriftStatus.HEALTHY,
+            com.example.model.DriftStatus.safeValueOf("unknown_value")
+        )
+
+        val client = com.example.data.remote.BackendConnectorClient()
+        val rfModelJson = """
+            {
+              "model_id": "mdl_rf000012",
+              "instrument": "EUR/USD",
+              "timeframe": "1m",
+              "algorithm": "random_forest",
+              "status": "ACTIVE",
+              "train_samples": 180,
+              "validation_samples": 60,
+              "test_samples": 60,
+              "out_of_sample_accuracy": 0.61,
+              "brier_score": 0.22,
+              "log_loss": 0.63,
+              "ece": 0.05,
+              "simulated_trades": 30,
+              "simulated_win_rate": 0.63,
+              "simulated_net_pnl": 140.5,
+              "validation_notes": "[ds_v2_a1b2c3d4_n320] Passed walk-forward gate",
+              "dataset_version": "ds_v2_a1b2c3d4_n320",
+              "feature_count": 17,
+              "drift_status": "WARNING",
+              "drift_score": 0.44,
+              "live_settled_trades": 12,
+              "live_win_rate": 0.50,
+              "drift_notes": "Feature shift: adx_norm, vwap_dist_pct",
+              "rolled_back_from_model_id": "mdl_lr000009"
+            }
+        """.trimIndent()
+        val parsedRf = client.parseModelRegistryItemJson(rfModelJson)?.toDomain()
+        assertEquals("random_forest", parsedRf?.algorithm)
+        assertEquals("ds_v2_a1b2c3d4_n320", parsedRf?.datasetVersion)
+        assertEquals(17, parsedRf?.featureCount)
+        assertEquals(com.example.model.DriftStatus.WARNING, parsedRf?.driftStatus)
+        assertEquals(0.44, parsedRf?.driftScore ?: 0.0, 1e-6)
+        assertEquals("mdl_lr000009", parsedRf?.rolledBackFromModelId)
+
+        val driftJson = """
+            {
+              "model_id": "mdl_rf000012",
+              "drift_status": "DRIFT_DETECTED",
+              "drift_score": 0.82,
+              "feature_drift_score": 0.74,
+              "drifted_features": ["adx_norm", "stoch_k_norm"],
+              "live_settled_trades": 14,
+              "live_win_rate": 0.3571,
+              "baseline_win_rate": 0.63,
+              "win_rate_drop": 0.2729,
+              "drift_notes": "DRIFT ALERT: Manual rollback recommended (no auto-swap)",
+              "recommend_rollback": true,
+              "checked_at": "2026-11-25T10:00:00Z"
+            }
+        """.trimIndent()
+        val parsedDrift = client.parseModelDriftCheckJson(driftJson)?.toDomain()
+        assertEquals(com.example.model.DriftStatus.DRIFT_DETECTED, parsedDrift?.driftStatus)
+        assertEquals(0.82, parsedDrift?.driftScore ?: 0.0, 1e-6)
+        assertEquals(listOf("adx_norm", "stoch_k_norm"), parsedDrift?.driftedFeatures)
+        assertTrue(parsedDrift?.recommendRollback == true)
+
+        val sysWsDriftJson = """
+            {
+              "type": "system",
+              "execution_mode": "SIMULATION",
+              "connector": "simulation_connector",
+              "connector_connected": true,
+              "live_authorized": false,
+              "emergency_stopped": false,
+              "unresolved_orders_count": 0,
+              "selected_strategy_id": "regime_adaptive",
+              "auto_select_strategy": true,
+              "active_model_drift_status": "DRIFT_DETECTED",
+              "active_model_drift_score": 0.82,
+              "active_model_drift_notes": "Manual rollback recommended"
+            }
+        """.trimIndent()
+        val parsedSysDrift = client.parseWebSocketSystemJson(sysWsDriftJson)
+        assertEquals("DRIFT_DETECTED", parsedSysDrift?.active_model_drift_status)
+        assertEquals(0.82, parsedSysDrift?.active_model_drift_score ?: 0.0, 1e-6)
+    }
 }
 

@@ -440,6 +440,17 @@ data class ReplaySessionState(
     val isBackendBacked: Boolean = false
 )
 
+enum class DriftStatus(val labelTh: String) {
+    HEALTHY("ปกติ"),
+    WARNING("เฝ้าระวัง Drift"),
+    DRIFT_DETECTED("พบ Drift / ประสิทธิภาพลดลง");
+
+    companion object {
+        fun safeValueOf(raw: String?): DriftStatus =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: HEALTHY
+    }
+}
+
 data class MlModelSummary(
     val modelId: String,
     val instrument: String,
@@ -459,7 +470,31 @@ data class MlModelSummary(
     val validationNotes: String,
     val createdAt: String = "",
     val promotedAt: String? = null,
-    val isActive: Boolean = false
+    val isActive: Boolean = false,
+    val datasetVersion: String = "ds_v2_unknown",
+    val featureCount: Int = 17,
+    val driftStatus: DriftStatus = DriftStatus.HEALTHY,
+    val driftScore: Double = 0.0,
+    val liveSettledTrades: Int = 0,
+    val liveWinRate: Double = 0.0,
+    val driftNotes: String = "",
+    val lastDriftCheckedAt: String? = null,
+    val rolledBackFromModelId: String? = null
+)
+
+data class MlDriftReport(
+    val modelId: String,
+    val driftStatus: DriftStatus,
+    val driftScore: Double,
+    val featureDriftScore: Double,
+    val driftedFeatures: List<String>,
+    val liveSettledTrades: Int,
+    val liveWinRate: Double,
+    val baselineWinRate: Double,
+    val winRateDrop: Double,
+    val driftNotes: String,
+    val recommendRollback: Boolean,
+    val checkedAt: String = ""
 )
 
 data class BackendOrderSummary(

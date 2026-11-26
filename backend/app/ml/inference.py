@@ -15,7 +15,7 @@ from app.domain import (
     TradeDirection,
 )
 from app.engines.signal_engine import AISignalEngine
-from app.ml.features import FeatureEngineeringEngine
+from app.ml.features import FEATURE_NAMES, FeatureEngineeringEngine
 from app.ml.registry import ModelRegistryService
 from app.ml.trainer import PlattCalibratedBundle
 
@@ -29,6 +29,9 @@ class MLSignalInferenceService:
     def __init__(self, artifacts_dir: Path) -> None:
         self._artifacts_dir = artifacts_dir
         self._cache: Dict[str, PlattCalibratedBundle] = {}
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
 
     def _load_bundle(self, model_id: str, artifact_filename: str) -> PlattCalibratedBundle:
         if model_id in self._cache:
@@ -56,7 +59,13 @@ class MLSignalInferenceService:
 
         bundle = self._load_bundle(active_row.model_id, active_row.artifact_filename)
         vec = FeatureEngineeringEngine.extract_latest_features(candles_1m, strategy)
-        X_latest = np.asarray([vec], dtype=float)
+        expected_names = getattr(bundle, "feature_names", FEATURE_NAMES)
+        if len(expected_names) != len(vec):
+            name_to_val = dict(zip(FEATURE_NAMES, vec))
+            aligned_vec = [float(name_to_val.get(name, 0.0)) for name in expected_names]
+        else:
+            aligned_vec = vec
+        X_latest = np.asarray([aligned_vec], dtype=float)
         prob_up = float(bundle.predict_calibrated_up(X_latest)[0])
         prob_down = 1.0 - prob_up
 

@@ -30,7 +30,7 @@ from app.engines.technical_analysis import TechnicalAnalysisEngine
 from app.ml.inference import MLSignalInferenceService
 from app.ml.registry import ModelRegistryService
 from app.ml.trainer import ModelTrainer, ValidationGatePolicy
-from app.models import OrderRecordModel, RiskPolicyModel, TradingStateModel
+from app.models import ModelRegistryModel, OrderRecordModel, RiskPolicyModel, TradingStateModel
 from app.repositories.historical_candles import HistoricalCandleRepository
 from app.schemas import (
     CandleHistoryIngestRequest,
@@ -41,6 +41,7 @@ from app.schemas import (
     HealthResponse,
     MarketIntelligenceResponse,
     ModeSwitchRequest,
+    ModelDriftCheckResponse,
     ModelRegistryItemResponse,
     MultiTimeframeReportSchema,
     OrderLifecycleEventResponse,
@@ -53,6 +54,7 @@ from app.schemas import (
     ReplayStateResponse,
     ReplayStepRequest,
     RiskPolicySchema,
+    RollbackModelRequest,
     SelectStrategyRequest,
     SignalResponse,
     StrategyParameters,
@@ -98,8 +100,8 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(
         title=settings.app_name,
-        version="6.0.0",
-        description="IQ Trading AI Hybrid FastAPI Backend (Phase 6 Strategy Selector, WebSockets & Indicators)",
+        version="7.0.0",
+        description="IQ Trading AI Hybrid FastAPI Backend (Phase 7 ML Drift Monitoring & Manual Rollback)",
         lifespan=lifespan,
     )
 
@@ -394,6 +396,92 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                 artifacts_dir=artifacts_dir,
                 owner_confirmed=payload.owner_confirmed,
             )
+            ml_inference.clear_cache()
+            return ModelRegistryItemResponse.from_orm_model(row)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except (KeyError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @application.post(
+        "/api/v1/ml/models/{model_id}/drift-check",
+        response_model=ModelDriftCheckResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Machine Learning"],
+    )
+    async def check_ml_model_drift(
+        model_id: str,
+        db: Session = Depends(get_db),
+    ) -> ModelDriftCheckResponse:
+        target = db.get(ModelRegistryModel, model_id)
+        if target is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Model '{model_id}' not found.")
+
+        recent_candles = await connector.get_candles(
+            instrument=target.instrument,
+            timeframe=target.timeframe,
+            limit=120,
+        )
+        orders = (
+            db.query(OrderRecordModel)
+            .filter(OrderRecordModel.instrument == target.instrument)
+            .all()
+        )
+        active = replace(
+            strategy_engine.get_active_strategy(),
+            instrument=target.instrument,
+            timeframe=target.timeframe,
+        )
+        try:
+            updated_row, report = ModelRegistryService.evaluate_model_drift(
+                db=db,
+                model_id=model_id,
+                recent_candles=recent_candles,
+                orders=orders,
+                strategy=active,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+        return ModelDriftCheckResponse(
+            model_id=report.model_id,
+            drift_status=report.drift_status,
+            drift_score=report.drift_score,
+            feature_drift_score=report.feature_drift_score,
+            drifted_features=report.drifted_features,
+            live_settled_trades=report.live_settled_trades,
+            live_win_rate=report.live_win_rate,
+            baseline_win_rate=report.baseline_win_rate,
+            win_rate_drop=report.win_rate_drop,
+            drift_notes=report.drift_notes,
+            recommend_rollback=report.recommend_rollback,
+            checked_at=updated_row.last_drift_checked_at or updated_row.created_at,
+        )
+
+    @application.post(
+        "/api/v1/ml/models/{model_id}/rollback",
+        response_model=ModelRegistryItemResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Machine Learning"],
+    )
+    async def rollback_ml_model(
+        model_id: str,
+        payload: RollbackModelRequest,
+        db: Session = Depends(get_db),
+    ) -> ModelRegistryItemResponse:
+        try:
+            row = ModelRegistryService.rollback_model(
+                db=db,
+                target_model_id=model_id,
+                artifacts_dir=artifacts_dir,
+                owner_confirmed=payload.owner_confirmed,
+                reason=payload.reason,
+            )
+            ml_inference.clear_cache()
             return ModelRegistryItemResponse.from_orm_model(row)
         except PermissionError as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
@@ -904,6 +992,15 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                     unresolved = TradeExecutionEngine.count_unresolved_orders(db)
                     mode_val = state.execution_mode
                     emergency = policy.emergency_stopped
+                    active_ml = (
+                        db.query(ModelRegistryModel)
+                        .filter(ModelRegistryModel.status == "ACTIVE")
+                        .order_by(ModelRegistryModel.promoted_at.desc())
+                        .first()
+                    )
+                    drift_status = (active_ml.drift_status if active_ml is not None else "HEALTHY") or "HEALTHY"
+                    drift_score = float(active_ml.drift_score) if active_ml is not None else 0.0
+                    drift_notes = (active_ml.drift_notes if active_ml is not None else "") or ""
                 finally:
                     gen.close()
 
@@ -918,6 +1015,9 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                         "unresolved_orders_count": unresolved,
                         "selected_strategy_id": strategy_engine.selected_strategy_id,
                         "auto_select_strategy": strategy_engine.auto_select_enabled,
+                        "active_model_drift_status": drift_status,
+                        "active_model_drift_score": drift_score,
+                        "active_model_drift_notes": drift_notes,
                     }
                 )
                 await asyncio.sleep(3.0)

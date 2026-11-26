@@ -73,6 +73,12 @@ class ModelStatus(str, Enum):
     REJECTED = "REJECTED"
 
 
+class DriftStatus(str, Enum):
+    HEALTHY = "HEALTHY"
+    WARNING = "WARNING"
+    DRIFT_DETECTED = "DRIFT_DETECTED"
+
+
 @dataclass
 class StrategyConfig:
     name: str = "EMA-RSI Momentum"

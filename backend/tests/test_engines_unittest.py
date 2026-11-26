@@ -4,11 +4,14 @@ import unittest
 from app.connectors.simulation import SimulationConnector
 from app.domain import (
     AlignmentState,
+    DriftStatus,
     ExecutionMode,
     MarketRegime,
+    OrderLifecycleState,
     RiskPolicyConfig,
     StrategyConfig,
     TradeDirection,
+    TradeStatus,
 )
 from app.engines.market_intelligence import MarketIntelligenceEngine
 from app.engines.multi_timeframe import MultiTimeframeEngine
@@ -18,7 +21,14 @@ from app.engines.signal_engine import AISignalEngine
 from app.engines.strategy_engine import StrategySelectionEngine
 from app.engines.technical_analysis import TechnicalAnalysisEngine
 from app.ml.backtesting import WalkForwardBacktester
-from app.ml.features import FeatureEngineeringEngine
+from app.ml.drift import (
+    compute_feature_baseline,
+    compute_feature_drift,
+    dumps_baseline_stats,
+    evaluate_model_drift,
+    loads_baseline_stats,
+)
+from app.ml.features import FEATURE_NAMES, FeatureEngineeringEngine
 from app.ml.splitting import ChronologicalSplitter
 
 
@@ -432,6 +442,71 @@ class TestPurePythonEngines(unittest.TestCase):
         self.assertFalse(pinned.auto_selected)
         self.assertEqual(pinned.selected_strategy_id, "bb_mean_reversion")
         self.assertEqual(engine.get_active_strategy().name, "Bollinger Mean Reversion")
+
+    def test_phase7_17_features_dataset_version_and_drift_detection(self) -> None:
+        self.assertEqual(len(FEATURE_NAMES), 17)
+        for col in ("adx_norm", "di_spread", "stoch_k_norm", "stoch_d_norm", "vwap_dist_pct"):
+            self.assertIn(col, FEATURE_NAMES)
+
+        candles = asyncio.run(self.connector.get_candles("EUR/USD", "1m", limit=180))
+        v1 = FeatureEngineeringEngine.compute_dataset_version(candles, FEATURE_NAMES)
+        v2 = FeatureEngineeringEngine.compute_dataset_version(candles, FEATURE_NAMES)
+        self.assertTrue(v1.startswith("ds_v2_"))
+        self.assertEqual(v1, v2)
+
+        ds = FeatureEngineeringEngine.build_dataset(candles, self.strategy, horizon_bars=1, execution_delay_bars=1)
+        self.assertEqual(len(ds.feature_names), 17)
+        self.assertEqual(len(ds.features[0]), 17)
+
+        baseline = compute_feature_baseline(ds.features[:80], FEATURE_NAMES)
+        reloaded = loads_baseline_stats(dumps_baseline_stats(baseline))
+        self.assertEqual(set(reloaded.keys()), set(FEATURE_NAMES))
+
+        # In-distribution check should remain low
+        low_score, low_drifted = compute_feature_drift(reloaded, ds.features[:30], FEATURE_NAMES)
+        self.assertLess(low_score, 0.35)
+        self.assertEqual(low_drifted, [])
+
+        # Strongly shifted distribution must trigger feature drift
+        shifted = [[val + 4.5 for val in row] for row in ds.features[-20:]]
+        high_score, high_drifted = compute_feature_drift(reloaded, shifted, FEATURE_NAMES)
+        self.assertGreaterEqual(high_score, 0.65)
+        self.assertTrue(len(high_drifted) > 0)
+
+        # Fake order records: 10 settled losses + PENDING/UNKNOWN orders that MUST be ignored
+        class FakeOrder:
+            def __init__(self, instrument: str, lifecycle_state: str, status: str, settlement_outcome: str | None):
+                self.instrument = instrument
+                self.lifecycle_state = lifecycle_state
+                self.status = status
+                self.settlement_outcome = settlement_outcome
+                self.created_at = None
+
+        orders = [
+            FakeOrder("EUR/USD", OrderLifecycleState.SETTLED.value, TradeStatus.LOST.value, TradeStatus.LOST.value)
+            for _ in range(9)
+        ] + [
+            FakeOrder("EUR/USD", OrderLifecycleState.SETTLED.value, TradeStatus.WON.value, TradeStatus.WON.value),
+            FakeOrder("EUR/USD", OrderLifecycleState.PENDING.value, TradeStatus.PENDING.value, None),
+            FakeOrder("EUR/USD", OrderLifecycleState.UNKNOWN.value, TradeStatus.UNKNOWN.value, None),
+            FakeOrder("EUR/USD", OrderLifecycleState.FAILED.value, TradeStatus.FAILED.value, None),
+            FakeOrder("GBP/USD", OrderLifecycleState.SETTLED.value, TradeStatus.WON.value, TradeStatus.WON.value),
+        ]
+
+        report = evaluate_model_drift(
+            model_id="mdl_test000001",
+            instrument="EUR/USD",
+            baseline_stats=reloaded,
+            baseline_win_rate=0.62,
+            recent_features=ds.features[-20:],
+            feature_names=FEATURE_NAMES,
+            orders=orders,
+        )
+        # Strictly counts the 10 settled EUR/USD orders (1 win / 10 settled = 0.10)
+        self.assertEqual(report.live_settled_trades, 10)
+        self.assertAlmostEqual(report.live_win_rate, 0.10, places=4)
+        self.assertEqual(report.drift_status, DriftStatus.DRIFT_DETECTED)
+        self.assertTrue(report.recommend_rollback)
 
 
 if __name__ == "__main__":

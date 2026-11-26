@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from app.domain import (
     AlignmentState,
     DataQualityReport,
+    DriftStatus,
     ExecutionMode,
     MarketRegime,
     ModelStatus,
@@ -370,7 +371,10 @@ class TradingStateResponse(BaseModel):
 class TrainModelRequest(BaseModel):
     instrument: str = Field(default="EUR/USD", min_length=3, max_length=20)
     timeframe: str = Field(default="1m", pattern="^(1m)$")
-    algorithm: str = Field(default="logistic_regression", pattern="^(logistic_regression|hist_gradient_boosting)$")
+    algorithm: str = Field(
+        default="logistic_regression",
+        pattern="^(logistic_regression|hist_gradient_boosting|random_forest)$",
+    )
     total_bars: int = Field(default=360, ge=220, le=600)
     payout_rate: float = Field(default=0.85, ge=0.50, le=0.98)
     execution_delay_bars: int = Field(default=1, ge=0, le=3)
@@ -381,6 +385,26 @@ class TrainModelRequest(BaseModel):
 
 class PromoteModelRequest(BaseModel):
     owner_confirmed: bool = False
+
+
+class RollbackModelRequest(BaseModel):
+    owner_confirmed: bool = False
+    reason: Optional[str] = Field(default=None, max_length=240)
+
+
+class ModelDriftCheckResponse(BaseModel):
+    model_id: str
+    drift_status: DriftStatus
+    drift_score: float
+    feature_drift_score: float
+    drifted_features: List[str]
+    live_settled_trades: int
+    live_win_rate: float
+    baseline_win_rate: float
+    win_rate_drop: float
+    drift_notes: str
+    recommend_rollback: bool
+    checked_at: datetime
 
 
 class ModelRegistryItemResponse(BaseModel):
@@ -401,11 +425,21 @@ class ModelRegistryItemResponse(BaseModel):
     simulated_net_pnl: float
     artifact_filename: str
     validation_notes: str
+    dataset_version: str = "ds_v2_unknown"
+    feature_count: int = 17
+    drift_status: DriftStatus = DriftStatus.HEALTHY
+    drift_score: float = 0.0
+    live_settled_trades: int = 0
+    live_win_rate: float = 0.0
+    drift_notes: str = ""
+    last_drift_checked_at: Optional[datetime] = None
+    rolled_back_from_model_id: Optional[str] = None
     created_at: datetime
     promoted_at: Optional[datetime] = None
 
     @classmethod
     def from_orm_model(cls, row) -> "ModelRegistryItemResponse":
+        raw_drift = getattr(row, "drift_status", "HEALTHY") or "HEALTHY"
         return cls(
             model_id=row.model_id,
             instrument=row.instrument,
@@ -424,6 +458,15 @@ class ModelRegistryItemResponse(BaseModel):
             simulated_net_pnl=row.simulated_net_pnl,
             artifact_filename=row.artifact_filename,
             validation_notes=row.validation_notes,
+            dataset_version=getattr(row, "dataset_version", "ds_v2_unknown") or "ds_v2_unknown",
+            feature_count=int(getattr(row, "feature_count", 17) or 17),
+            drift_status=DriftStatus(raw_drift),
+            drift_score=float(getattr(row, "drift_score", 0.0) or 0.0),
+            live_settled_trades=int(getattr(row, "live_settled_trades", 0) or 0),
+            live_win_rate=float(getattr(row, "live_win_rate", 0.0) or 0.0),
+            drift_notes=getattr(row, "drift_notes", "") or "",
+            last_drift_checked_at=getattr(row, "last_drift_checked_at", None),
+            rolled_back_from_model_id=getattr(row, "rolled_back_from_model_id", None),
             created_at=row.created_at,
             promoted_at=row.promoted_at,
         )

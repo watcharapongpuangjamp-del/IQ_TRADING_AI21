@@ -47,6 +47,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.model.DriftStatus
 import com.example.model.ExecutionMode
 import com.example.model.ExecutionStage
 import com.example.model.RiskPolicy
@@ -292,6 +293,53 @@ fun TerminalScreen(
                             Text(
                                 text = if (terminalState.isReconciling) "กำลังตรวจ..." else "Reconcile",
                                 fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1c. ML Drift Monitoring Alert Banner (Alerts only; never auto-swaps model)
+        if (terminalState.activeModelDriftStatus != DriftStatus.HEALTHY) {
+            item {
+                val isCritical = terminalState.activeModelDriftStatus == DriftStatus.DRIFT_DETECTED
+                val alertColor = if (isCritical) tradingColors.bearish else tradingColors.warning
+                val alertBg = if (isCritical) tradingColors.bearishContainer else tradingColors.warningContainer
+                Surface(
+                    color = alertBg,
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, alertColor.copy(alpha = 0.7f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("ml_drift_alert_banner")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Warning,
+                            contentDescription = "ML Model Drift Alert",
+                            tint = alertColor,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "ML Drift Monitor: ${terminalState.activeModelDriftStatus.labelTh} (Score ${String.format("%.2f", terminalState.activeModelDriftScore)})",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = alertColor
+                            )
+                            Text(
+                                text = terminalState.activeModelDriftNotes.ifBlank {
+                                    "ตรวจพบความเบี่ยงเบนของฟีเจอร์หรือ Win Rate ลดลง — กรุณาตรวจสอบและกด Rollback เองในแท็บ Strategy -> ML Models (ระบบไม่เปลี่ยนโมเดลอัตโนมัติ)"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         }
                     }

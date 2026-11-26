@@ -43,6 +43,24 @@ def ensure_schema_migrations(target_engine) -> None:
             text("UPDATE orders SET correlation_id = 'corr_' || order_id WHERE correlation_id IS NULL OR correlation_id = ''")
         )
 
+        mr_cols_res = conn.execute(text("PRAGMA table_info(model_registry)")).fetchall()
+        mr_existing = {row[1] for row in mr_cols_res}
+        mr_migrations = [
+            ("dataset_version", "VARCHAR(64) NOT NULL DEFAULT 'ds_v2_unknown'"),
+            ("feature_count", "INTEGER NOT NULL DEFAULT 17"),
+            ("baseline_stats_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ("drift_status", "VARCHAR(24) NOT NULL DEFAULT 'HEALTHY'"),
+            ("drift_score", "FLOAT NOT NULL DEFAULT 0.0"),
+            ("live_settled_trades", "INTEGER NOT NULL DEFAULT 0"),
+            ("live_win_rate", "FLOAT NOT NULL DEFAULT 0.0"),
+            ("drift_notes", "VARCHAR(512) NOT NULL DEFAULT ''"),
+            ("last_drift_checked_at", "DATETIME"),
+            ("rolled_back_from_model_id", "VARCHAR(64)"),
+        ]
+        for col_name, col_def in mr_migrations:
+            if col_name not in mr_existing:
+                conn.execute(text(f"ALTER TABLE model_registry ADD COLUMN {col_name} {col_def}"))
+
 
 def get_db():
     db = SessionLocal()

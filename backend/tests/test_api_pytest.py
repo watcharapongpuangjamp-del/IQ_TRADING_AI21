@@ -494,4 +494,77 @@ def test_phase6_signal_and_system_websockets(client: TestClient) -> None:
         assert sys_msg["type"] == "system"
         assert sys_msg["execution_mode"] == "SIMULATION"
         assert "selected_strategy_id" in sys_msg
+        assert "active_model_drift_status" in sys_msg
+
+
+def test_phase7_random_forest_dataset_version_drift_check_and_manual_rollback(client: TestClient) -> None:
+    rf_res = client.post(
+        "/api/v1/ml/train",
+        json={
+            "instrument": "EUR/USD",
+            "timeframe": "1m",
+            "algorithm": "random_forest",
+            "total_bars": 320,
+            "max_brier_score": 0.45,
+            "max_ece": 0.45,
+            "min_accuracy": 0.40,
+        },
+    )
+    assert rf_res.status_code == 200
+    rf_model = rf_res.json()
+    assert rf_model["algorithm"] == "random_forest"
+    assert rf_model["status"] == "VALIDATED"
+    assert rf_model["dataset_version"].startswith("ds_v2_")
+    assert rf_model["feature_count"] == 17
+
+    lr_res = client.post(
+        "/api/v1/ml/train",
+        json={
+            "instrument": "EUR/USD",
+            "timeframe": "1m",
+            "algorithm": "logistic_regression",
+            "total_bars": 320,
+            "max_brier_score": 0.45,
+            "max_ece": 0.45,
+            "min_accuracy": 0.40,
+        },
+    )
+    assert lr_res.status_code == 200
+    lr_model = lr_res.json()
+
+    # Promote LR model to ACTIVE
+    prom = client.post(
+        f"/api/v1/ml/models/{lr_model['model_id']}/promote",
+        json={"owner_confirmed": True},
+    )
+    assert prom.status_code == 200
+    assert prom.json()["status"] == "ACTIVE"
+
+    # Run drift check on ACTIVE LR model (never auto-swaps)
+    drift_res = client.post(f"/api/v1/ml/models/{lr_model['model_id']}/drift-check")
+    assert drift_res.status_code == 200
+    drift = drift_res.json()
+    assert drift["model_id"] == lr_model["model_id"]
+    assert drift["drift_status"] in ("HEALTHY", "WARNING", "DRIFT_DETECTED")
+    assert client.get("/api/v1/ml/active", params={"instrument": "EUR/USD", "timeframe": "1m"}).json()["model_id"] == lr_model["model_id"]
+
+    # Rollback without owner confirmation is blocked (403)
+    unauth_rb = client.post(
+        f"/api/v1/ml/models/{rf_model['model_id']}/rollback",
+        json={"owner_confirmed": False, "reason": "Unauthorized attempt"},
+    )
+    assert unauth_rb.status_code == 403
+
+    # Owner-confirmed rollback activates RF model and demotes LR back to VALIDATED
+    rb = client.post(
+        f"/api/v1/ml/models/{rf_model['model_id']}/rollback",
+        json={"owner_confirmed": True, "reason": "Operator rollback after drift check"},
+    )
+    assert rb.status_code == 200
+    rb_data = rb.json()
+    assert rb_data["status"] == "ACTIVE"
+    assert rb_data["rolled_back_from_model_id"] == lr_model["model_id"]
+
+    active_now = client.get("/api/v1/ml/active", params={"instrument": "EUR/USD", "timeframe": "1m"}).json()
+    assert active_now["model_id"] == rf_model["model_id"]
 

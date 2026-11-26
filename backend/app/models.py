@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, Integer, String, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -126,5 +126,15 @@ class ModelRegistryModel(Base):
     simulated_net_pnl: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     artifact_filename: Mapped[str] = mapped_column(String(128), nullable=False)
     validation_notes: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    dataset_version: Mapped[str] = mapped_column(String(64), default="ds_v2_unknown", nullable=False)
+    feature_count: Mapped[int] = mapped_column(Integer, default=17, nullable=False)
+    baseline_stats_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    drift_status: Mapped[str] = mapped_column(String(24), default="HEALTHY", nullable=False)
+    drift_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    live_settled_trades: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    live_win_rate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    drift_notes: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    last_drift_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rolled_back_from_model_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -4,7 +4,9 @@ import com.example.model.AlignmentState
 import com.example.model.BackendOrderSummary
 import com.example.model.Candle
 import com.example.model.DataQualitySummary
+import com.example.model.DriftStatus
 import com.example.model.MarketRegime
+import com.example.model.MlDriftReport
 import com.example.model.MlModelSummary
 import com.example.model.MultiTimeframeReport
 import com.example.model.OrderLifecycleEvent
@@ -433,6 +435,43 @@ data class PromoteModelRequestDto(
 )
 
 @JsonClass(generateAdapter = true)
+data class RollbackModelRequestDto(
+    val owner_confirmed: Boolean = true,
+    val reason: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ModelDriftCheckResponseDto(
+    val model_id: String,
+    val drift_status: String = "HEALTHY",
+    val drift_score: Double = 0.0,
+    val feature_drift_score: Double = 0.0,
+    val drifted_features: List<String> = emptyList(),
+    val live_settled_trades: Int = 0,
+    val live_win_rate: Double = 0.0,
+    val baseline_win_rate: Double = 0.0,
+    val win_rate_drop: Double = 0.0,
+    val drift_notes: String = "",
+    val recommend_rollback: Boolean = false,
+    val checked_at: String = ""
+) {
+    fun toDomain(): MlDriftReport = MlDriftReport(
+        modelId = model_id,
+        driftStatus = DriftStatus.safeValueOf(drift_status),
+        driftScore = drift_score,
+        featureDriftScore = feature_drift_score,
+        driftedFeatures = drifted_features,
+        liveSettledTrades = live_settled_trades,
+        liveWinRate = live_win_rate,
+        baselineWinRate = baseline_win_rate,
+        winRateDrop = win_rate_drop,
+        driftNotes = drift_notes,
+        recommendRollback = recommend_rollback,
+        checkedAt = checked_at
+    )
+}
+
+@JsonClass(generateAdapter = true)
 data class ModelRegistryItemDto(
     val model_id: String,
     val instrument: String,
@@ -451,6 +490,15 @@ data class ModelRegistryItemDto(
     val simulated_net_pnl: Double = 0.0,
     val artifact_filename: String = "",
     val validation_notes: String = "",
+    val dataset_version: String = "ds_v2_unknown",
+    val feature_count: Int = 17,
+    val drift_status: String = "HEALTHY",
+    val drift_score: Double = 0.0,
+    val live_settled_trades: Int = 0,
+    val live_win_rate: Double = 0.0,
+    val drift_notes: String = "",
+    val last_drift_checked_at: String? = null,
+    val rolled_back_from_model_id: String? = null,
     val created_at: String = "",
     val promoted_at: String? = null
 ) {
@@ -473,7 +521,16 @@ data class ModelRegistryItemDto(
         validationNotes = validation_notes,
         createdAt = created_at,
         promotedAt = promoted_at,
-        isActive = status.equals("ACTIVE", ignoreCase = true) || model_id == activeModelId
+        isActive = status.equals("ACTIVE", ignoreCase = true) || model_id == activeModelId,
+        datasetVersion = dataset_version,
+        featureCount = feature_count,
+        driftStatus = DriftStatus.safeValueOf(drift_status),
+        driftScore = drift_score,
+        liveSettledTrades = live_settled_trades,
+        liveWinRate = live_win_rate,
+        driftNotes = drift_notes,
+        lastDriftCheckedAt = last_drift_checked_at,
+        rolledBackFromModelId = rolled_back_from_model_id
     )
 }
 
@@ -582,5 +639,8 @@ data class WebSocketSystemDto(
     val emergency_stopped: Boolean = false,
     val unresolved_orders_count: Int = 0,
     val selected_strategy_id: String = "",
-    val auto_select_strategy: Boolean = true
+    val auto_select_strategy: Boolean = true,
+    val active_model_drift_status: String = "HEALTHY",
+    val active_model_drift_score: Double = 0.0,
+    val active_model_drift_notes: String = ""
 )

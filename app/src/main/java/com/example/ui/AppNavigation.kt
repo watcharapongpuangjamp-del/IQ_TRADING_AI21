@@ -462,7 +462,9 @@ private fun AuthenticatedTradingShell(
                                 strategyReport = terminalState.strategyReport,
                                 isStrategyBusy = terminalState.isStrategyBusy,
                                 onRefreshStrategies = viewModel::refreshStrategyModules,
-                                onSelectStrategyModule = viewModel::selectStrategyModule
+                                onSelectStrategyModule = viewModel::selectStrategyModule,
+                                onCheckMlDrift = viewModel::checkMlModelDrift,
+                                onRollbackMlModel = { targetId -> viewModel.rollbackMlModel(targetId) }
                             )
                         }
                         composable(NavRoutes.PNL) {

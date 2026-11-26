@@ -24,10 +24,12 @@ import com.example.model.BackendOrderSummary
 import com.example.model.Candle
 import com.example.model.DailyPnLSummary
 import com.example.model.DataQualitySummary
+import com.example.model.DriftStatus
 import com.example.model.ExecutionMode
 import com.example.model.ExecutionStage
 import com.example.model.IntegrationSettings
 import com.example.model.MarketRegime
+import com.example.model.MlDriftReport
 import com.example.model.MlModelSummary
 import com.example.model.MultiTimeframeReport
 import com.example.model.OfflineSyncStatus
@@ -99,7 +101,11 @@ data class TerminalUiState(
     val autoSelectStrategy: Boolean = true,
     val pinnedStrategyId: String? = null,
     val wsState: WebSocketConnectionState = WebSocketConnectionState(),
-    val offlineSyncStatus: OfflineSyncStatus = OfflineSyncStatus()
+    val offlineSyncStatus: OfflineSyncStatus = OfflineSyncStatus(),
+    val activeModelDriftStatus: DriftStatus = DriftStatus.HEALTHY,
+    val activeModelDriftScore: Double = 0.0,
+    val activeModelDriftNotes: String = "",
+    val lastDriftReport: MlDriftReport? = null
 )
 
 class TradingViewModel(
@@ -431,7 +437,12 @@ class TradingViewModel(
                             )
                         }
                         _terminalState.update {
-                            it.copy(unresolvedOrdersCount = sys.unresolved_orders_count)
+                            it.copy(
+                                unresolvedOrdersCount = sys.unresolved_orders_count,
+                                activeModelDriftStatus = DriftStatus.safeValueOf(sys.active_model_drift_status),
+                                activeModelDriftScore = sys.active_model_drift_score,
+                                activeModelDriftNotes = sys.active_model_drift_notes
+                            )
                         }
                     },
                     onFailure = {
@@ -1057,7 +1068,15 @@ class TradingViewModel(
     private suspend fun refreshMlModelsInternal(baseUrl: String, token: String?, instrument: String) {
         backendClient.fetchMlModels(baseUrl, token, instrument).onSuccess { list ->
             _mlModels.value = list
-            _activeMlModel.value = list.firstOrNull { it.isActive }
+            val active = list.firstOrNull { it.isActive }
+            _activeMlModel.value = active
+            _terminalState.update {
+                it.copy(
+                    activeModelDriftStatus = active?.driftStatus ?: DriftStatus.HEALTHY,
+                    activeModelDriftScore = active?.driftScore ?: 0.0,
+                    activeModelDriftNotes = active?.driftNotes.orEmpty()
+                )
+            }
         }
     }
 
@@ -1097,6 +1116,62 @@ class TradingViewModel(
                 }
                 .onFailure {
                     _snackbarMessage.value = "Promote โมเดลไม่สำเร็จ: ${it.localizedMessage}"
+                }
+            _isMlBusy.value = false
+        }
+    }
+
+    fun checkMlModelDrift(modelId: String) {
+        viewModelScope.launch {
+            val baseUrl = integrationSettings.value.backendBaseUrl
+            if (!backendClient.isValidHttpUrl(baseUrl)) {
+                _snackbarMessage.value = "กรุณาเชื่อมต่อ FastAPI Backend ก่อนตรวจ Drift"
+                return@launch
+            }
+            _isMlBusy.value = true
+            val token = credentialVault.getBackendToken()
+            val instrument = _terminalState.value.selectedInstrument
+            backendClient.checkMlModelDrift(baseUrl, token, modelId)
+                .onSuccess { report ->
+                    refreshMlModelsInternal(baseUrl, token, instrument)
+                    _terminalState.update {
+                        it.copy(
+                            activeModelDriftStatus = report.driftStatus,
+                            activeModelDriftScore = report.driftScore,
+                            activeModelDriftNotes = report.driftNotes,
+                            lastDriftReport = report
+                        )
+                    }
+                    _snackbarMessage.value = when (report.driftStatus) {
+                        DriftStatus.DRIFT_DETECTED ->
+                            "แจ้งเตือน ML Drift (${String.format("%.2f", report.driftScore)}) — แนะนำให้ผู้ใช้พิจารณา Rollback ด้วยตนเอง"
+                        DriftStatus.WARNING ->
+                            "เฝ้าระวัง Drift (${String.format("%.2f", report.driftScore)}): ${report.driftNotes}"
+                        DriftStatus.HEALTHY ->
+                            "ตรวจสอบโมเดลแล้ว: สถานะปกติ (Score ${String.format("%.2f", report.driftScore)})"
+                    }
+                }
+                .onFailure {
+                    _snackbarMessage.value = "ตรวจ Drift ไม่สำเร็จ: ${it.localizedMessage}"
+                }
+            _isMlBusy.value = false
+        }
+    }
+
+    fun rollbackMlModel(targetModelId: String, reason: String? = null) {
+        viewModelScope.launch {
+            val baseUrl = integrationSettings.value.backendBaseUrl
+            if (!backendClient.isValidHttpUrl(baseUrl)) return@launch
+            _isMlBusy.value = true
+            val token = credentialVault.getBackendToken()
+            val instrument = _terminalState.value.selectedInstrument
+            backendClient.rollbackMlModel(baseUrl, token, targetModelId, reason)
+                .onSuccess { rolledBack ->
+                    refreshMlModelsInternal(baseUrl, token, instrument)
+                    _snackbarMessage.value = "Rollback โมเดลกลับไปยัง ${rolledBack.algorithm} (${rolledBack.modelId.take(8)}) สำเร็จแล้ว"
+                }
+                .onFailure {
+                    _snackbarMessage.value = "Rollback โมเดลไม่สำเร็จ: ${it.localizedMessage}"
                 }
             _isMlBusy.value = false
         }

@@ -1,10 +1,13 @@
 from dataclasses import dataclass
+import hashlib
 import math
 from typing import Dict, List, Sequence
 
 from app.domain import StrategyConfig, TradeDirection
 from app.engines.market_intelligence import MarketIntelligenceEngine
 from app.engines.technical_analysis import TechnicalAnalysisEngine
+
+FEATURE_SCHEMA_VERSION = "v2"
 
 FEATURE_NAMES: List[str] = [
     "ret_1",
@@ -19,6 +22,11 @@ FEATURE_NAMES: List[str] = [
     "body_ratio",
     "upper_wick_ratio",
     "mtf_5m_bias",
+    "adx_norm",
+    "di_spread",
+    "stoch_k_norm",
+    "stoch_d_norm",
+    "vwap_dist_pct",
 ]
 
 
@@ -33,9 +41,29 @@ class FeatureDataset:
 
 class FeatureEngineeringEngine:
     """
-    Extracts strictly causal (zero look-ahead) quantitative features from OHLCV candles
-    and aligns binary outcomes accounting for execution delay and horizon bars.
+    Extracts strictly causal (zero look-ahead) 17-feature quantitative vectors from OHLCV candles
+    (including Phase 6 ADX, Stochastic, and VWAP signals) and aligns binary outcomes accounting
+    for execution delay and horizon bars.
     """
+
+    @staticmethod
+    def compute_dataset_version(
+        candles_1m: Sequence[Dict[str, float]],
+        feature_names: Sequence[str] = FEATURE_NAMES,
+    ) -> str:
+        ordered = sorted((dict(c) for c in candles_1m), key=lambda x: int(x["timestamp"]))
+        digest_input = "|".join(
+            [
+                FEATURE_SCHEMA_VERSION,
+                ",".join(feature_names),
+                str(len(ordered)),
+                str(int(ordered[0]["timestamp"])) if ordered else "0",
+                str(int(ordered[-1]["timestamp"])) if ordered else "0",
+                f"{float(ordered[-1]['close']):.6f}" if ordered else "0.0",
+            ]
+        )
+        short_hash = hashlib.sha256(digest_input.encode("utf-8")).hexdigest()[:8]
+        return f"ds_{FEATURE_SCHEMA_VERSION}_{short_hash}_n{len(ordered)}"
 
     @staticmethod
     def _extract_bar_features(
@@ -79,6 +107,17 @@ class FeatureEngineeringEngine:
             elif tf5.trend_bias == TradeDirection.PUT:
                 mtf_5m_bias = -1.0
 
+        # Phase 6/7 causal ADX, DI spread, Stochastic %K/%D, and reliable VWAP distance
+        adx_norm = min(1.0, max(0.0, snap.adx / 60.0))
+        di_spread = max(-1.0, min(1.0, (snap.plus_di - snap.minus_di) / 100.0))
+        stoch_k_norm = max(-1.0, min(1.0, (snap.stochastic_k - 50.0) / 50.0))
+        stoch_d_norm = max(-1.0, min(1.0, (snap.stochastic_d - 50.0) / 50.0))
+        vwap_dist_pct = (
+            max(-5.0, min(5.0, ((close - snap.vwap) / close) * 100.0))
+            if snap.vwap_reliable and snap.vwap > 0.0 and close > 0.0
+            else 0.0
+        )
+
         vec = [
             round(ret_1 * 100.0, 6),
             round(ret_3 * 100.0, 6),
@@ -92,6 +131,11 @@ class FeatureEngineeringEngine:
             round(body_ratio, 6),
             round(upper_wick_ratio, 6),
             mtf_5m_bias,
+            round(adx_norm, 6),
+            round(di_spread, 6),
+            round(stoch_k_norm, 6),
+            round(stoch_d_norm, 6),
+            round(vwap_dist_pct, 6),
         ]
         if not all(math.isfinite(x) for x in vec):
             raise ValueError("Non-finite feature value computed.")
@@ -107,6 +151,23 @@ class FeatureEngineeringEngine:
         if len(ordered) < 35:
             raise ValueError("At least 35 candles required for feature extraction.")
         return cls._extract_bar_features(ordered[-200:], strategy)
+
+    @classmethod
+    def extract_recent_feature_matrix(
+        cls,
+        candles_1m: Sequence[Dict[str, float]],
+        strategy: StrategyConfig,
+        max_samples: int = 30,
+    ) -> List[List[float]]:
+        ordered = sorted((dict(c) for c in candles_1m), key=lambda x: int(x["timestamp"]))
+        if len(ordered) < 40:
+            return []
+        start_idx = max(35, len(ordered) - max(1, max_samples))
+        matrix: List[List[float]] = []
+        for idx in range(start_idx, len(ordered)):
+            window_start = max(0, idx - 199)
+            matrix.append(cls._extract_bar_features(ordered[window_start : idx + 1], strategy))
+        return matrix
 
     @classmethod
     def build_dataset(

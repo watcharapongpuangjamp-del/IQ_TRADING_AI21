@@ -4,6 +4,7 @@ import com.example.model.BackendHealthState
 import com.example.model.BackendOrderSummary
 import com.example.model.Candle
 import com.example.model.ExecutionMode
+import com.example.model.MlDriftReport
 import com.example.model.MlModelSummary
 import com.example.model.OrderLifecycleEvent
 import com.example.model.ReconcileSummary
@@ -166,6 +167,19 @@ interface FastApiTradingApi {
         @Body payload: PromoteModelRequestDto
     ): Response<ModelRegistryItemDto>
 
+    @POST("api/v1/ml/models/{modelId}/drift-check")
+    suspend fun checkModelDrift(
+        @Header("Authorization") authHeader: String?,
+        @Path("modelId") modelId: String
+    ): Response<ModelDriftCheckResponseDto>
+
+    @POST("api/v1/ml/models/{modelId}/rollback")
+    suspend fun rollbackMlModel(
+        @Header("Authorization") authHeader: String?,
+        @Path("modelId") modelId: String,
+        @Body payload: RollbackModelRequestDto
+    ): Response<ModelRegistryItemDto>
+
     @GET("api/v1/strategies")
     suspend fun listStrategies(
         @Header("Authorization") authHeader: String?,
@@ -189,6 +203,7 @@ class BackendConnectorClient {
     private val strategyReportAdapter = moshi.adapter(StrategySelectionReportDto::class.java)
     private val intelligenceAdapter = moshi.adapter(MarketIntelligenceResponseDto::class.java)
     private val modelAdapter = moshi.adapter(ModelRegistryItemDto::class.java)
+    private val driftReportAdapter = moshi.adapter(ModelDriftCheckResponseDto::class.java)
     private val orderResponseAdapter = moshi.adapter(OrderSubmitResponseDto::class.java)
     private val reconcileAdapter = moshi.adapter(ReconcileSummaryDto::class.java)
 
@@ -261,6 +276,14 @@ class BackendConnectorClient {
     fun parseModelRegistryItemJson(rawJson: String): ModelRegistryItemDto? {
         return try {
             modelAdapter.fromJson(rawJson)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun parseModelDriftCheckJson(rawJson: String): ModelDriftCheckResponseDto? {
+        return try {
+            driftReportAdapter.fromJson(rawJson)
         } catch (_: Exception) {
             null
         }
@@ -672,6 +695,41 @@ class BackendConnectorClient {
             response.body()!!.toDomain(activeModelId = modelId)
         } else {
             throw IllegalStateException("ML promote HTTP ${response.code()}")
+        }
+    }
+
+    suspend fun checkMlModelDrift(
+        baseUrl: String,
+        bearerToken: String?,
+        modelId: String
+    ): Result<MlDriftReport> = safeCall {
+        val response = buildApi(baseUrl).checkModelDrift(buildAuthHeader(bearerToken), modelId)
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!.toDomain()
+        } else {
+            throw IllegalStateException("ML drift-check HTTP ${response.code()}")
+        }
+    }
+
+    suspend fun rollbackMlModel(
+        baseUrl: String,
+        bearerToken: String?,
+        targetModelId: String,
+        reason: String? = null
+    ): Result<MlModelSummary> = safeCall {
+        val response = buildApi(baseUrl).rollbackMlModel(
+            buildAuthHeader(bearerToken),
+            targetModelId,
+            RollbackModelRequestDto(owner_confirmed = true, reason = reason)
+        )
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!.toDomain(activeModelId = targetModelId)
+        } else {
+            val detail = response.errorBody()?.string()?.take(200)
+            throw IllegalStateException(
+                if (!detail.isNullOrBlank()) "ML rollback HTTP ${response.code()}: $detail"
+                else "ML rollback HTTP ${response.code()}"
+            )
         }
     }
 
