@@ -77,6 +77,12 @@ jobs:
             exit 1
           fi
 
+      - name: Run Embedded Python Engine Unit Tests
+        if: ${{ inputs.run_tests != 'false' }}
+        env:
+          PYTHONPATH: app/src/main/python
+        run: python -m unittest discover -s app/src/test/python -p "test_*.py" -v
+
       - name: Run Quantitative & Risk Engine Unit Tests
         if: ${{ inputs.run_tests != 'false' }}
         run: gradle :app:testDebugUnitTest
