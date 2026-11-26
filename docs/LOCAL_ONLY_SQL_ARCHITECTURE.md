@@ -8,7 +8,7 @@ The Python FastAPI service remains an optional execution/AI connector for broker
 
 ## Local SQL schema introduced
 
-Room database schema version 3 adds:
+Room database schema version 4 contains:
 - `local_user_profile`: local display name, execution mode, simulation balance.
 - `local_strategy_configs`: strategy parameters and active state.
 - `local_risk_policies`: risk limits, emergency stop, auto-trade state.
@@ -17,18 +17,27 @@ Room database schema version 3 adds:
 Existing tables remain:
 - `local_trade_logs`: trade history.
 - `cached_candles`: bounded market cache.
-- `sync_queue`: retained temporarily for migration compatibility only. It must not be processed or sent anywhere in the Local-Only release.
+- `legacy_local_queue_archive`: preserves old unsent queue payloads locally for audit/recovery only; no worker or code path processes or transmits them. The old `sync_queue` table is removed.
 
 `LocalTradingRepository` is the new local-only data-access boundary and contains no Firebase or HTTP dependencies.
 
-## Remaining removal and integration work
+## Completed in the current branch
 
-1. Rewire TradingViewModel and UI state to `LocalTradingRepository`; remove every Firestore repository call and offline sync queue processor.
-2. Replace Google/Firebase sign-in with local app startup and a local profile. No account is required to use local trading/simulation.
-3. Remove Firebase bootstrap, Firestore/Auth imports, Google sign-in screens, Firebase Gradle plugins/dependencies, google-services configuration, and Firebase-only secrets from build workflows.
-4. Remove Cloud Backup/Sync UI and cloud terminology. Replace it with local database status, local export/import and encrypted local backup controls.
-5. Migrate existing local trade cache and preserve user records. Do not silently delete old sync queue records during migration.
-6. Verify Android backup exclusions, encrypted local export, database migration tests, offline behavior, and a clean APK build.
+- TradingViewModel reads and writes trading state through `LocalTradingRepository`.
+- App startup uses a local profile; Google/Firebase sign-in screens and bootstrap code have been removed.
+- Firestore repository, sync queue processor, Firebase Auth helper, and Firebase error handler have been removed.
+- Firebase/Google sign-in Gradle dependencies, Google Services plugin, Firebase configuration files, and related CI secret setup have been removed.
+- Settings now describes local SQL storage; the cloud backup card and Terminal sync queue banner are removed.
+- Room migration 3→4 removes the cloud sync flag from trade rows, archives any old queued payloads locally, and removes the active sync queue table.
+- A Robolectric test was added for local profile, strategy, risk policy, and trade persistence.
+
+## Remaining validation and integration work
+
+1. Run the complete Android unit test suite and build a fresh debug APK; inspect and fix any compile or migration failures.
+2. Add explicit migration tests for existing version 2/3 databases, including preservation of trade rows and legacy queue archive rows.
+3. Add local export/import with optional password-based encryption and explicit user-controlled backup location. No automatic cloud backup.
+4. Verify local simulation continues when the device is in airplane mode; verify optional Python connector is isolated from the local database source of truth.
+5. Install and test the resulting APK on Android, including process restart and database upgrade from an existing installation.
 
 ## Data boundary
 
