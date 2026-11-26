@@ -91,7 +91,6 @@ class LocalTradingRepository(private val dao: TradingDao) {
     suspend fun updateUserBalanceAndMode(
         simulationBalance: Double,
         executionMode: ExecutionMode,
-        markBackupTimestamp: Boolean = false
     ): Result<Unit> = runCatching {
         val old = dao.getUserProfile() ?: LocalUserProfileEntity()
         dao.upsertUserProfile(old.copy(
@@ -139,7 +138,7 @@ class LocalTradingRepository(private val dao: TradingDao) {
         entryPrice = entryPrice, exitPrice = exitPrice, status = status, pnl = pnl,
         strategyName = strategyName, confidenceScore = confidenceScore,
         calibratedProbability = calibratedProbability, explanation = explanation,
-        createdAtMillis = createdAt, syncedToCloud = false
+        createdAtMillis = createdAt
     )
 
     private fun LocalTradeCacheEntity.toModel() = TradeRecord(
