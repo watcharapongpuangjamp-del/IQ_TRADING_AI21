@@ -40,8 +40,6 @@ class TradingCloudRepository(
         )
     )
 
-    private fun requireCloudSync() { check(runCatching { kotlinx.coroutines.runBlocking { cloudSyncEnabled() } }.getOrDefault(false)) { "Cloud Sync is disabled on this device." } }
-
     private fun requireUserId(): String {
         return auth.currentUser?.uid
             ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
@@ -284,7 +282,6 @@ class TradingCloudRepository(
         status: TradeStatus,
         pnl: Double
     ): Result<Unit> {
-        if (!cloudSyncEnabled()) return Result.failure(IllegalStateException("Cloud Sync is disabled on this device."))
         if (!cloudSyncEnabled()) return Result.failure(IllegalStateException("Cloud Sync is disabled on this device."))
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/trades/$tradeId"
         return try {
