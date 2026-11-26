@@ -31,13 +31,16 @@ import java.util.Locale
 
 class TradingCloudRepository(
     private val db: FirebaseFirestore,
-    private val auth: FirebaseAuth = Firebase.auth
+    private val auth: FirebaseAuth = Firebase.auth,
+    private val cloudSyncEnabled: suspend () -> Boolean = { false }
 ) {
     constructor(context: Context) : this(
         FirebaseFirestore.getInstance(
             context.applicationContext.getString(R.string.firestore_database_id)
         )
     )
+
+    private fun requireCloudSync() { check(runCatching { kotlinx.coroutines.runBlocking { cloudSyncEnabled() } }.getOrDefault(false)) { "Cloud Sync is disabled on this device." } }
 
     private fun requireUserId(): String {
         return auth.currentUser?.uid
@@ -48,6 +51,7 @@ class TradingCloudRepository(
         SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 
     suspend fun ensureUserBootstrap(userId: String, displayName: String, email: String?): Result<Unit> {
+        if (!cloudSyncEnabled()) return Result.failure(IllegalStateException("Cloud Sync is disabled on this device."))
         val userPath = "users/$userId"
         return try {
             val uid = requireUserId()
@@ -98,6 +102,7 @@ class TradingCloudRepository(
     }
 
     fun observeUserProfile(userId: String): Flow<UserProfile?> = flow {
+        if (!cloudSyncEnabled()) { emit(null); return@flow }
         val uid = requireUserId()
         check(uid == userId) { "Cross-user observation refused" }
         val path = "users/$uid"
@@ -118,6 +123,7 @@ class TradingCloudRepository(
     }
 
     fun observeStrategies(userId: String): Flow<List<StrategyConfig>> = flow {
+        if (!cloudSyncEnabled()) { emit(emptyList()); return@flow }
         val uid = requireUserId()
         check(uid == userId) { "Cross-user observation refused" }
         val path = "users/$uid/strategies"
@@ -138,6 +144,7 @@ class TradingCloudRepository(
     }
 
     fun observeRiskPolicy(userId: String): Flow<RiskPolicy?> = flow {
+        if (!cloudSyncEnabled()) { emit(null); return@flow }
         val uid = requireUserId()
         check(uid == userId) { "Cross-user observation refused" }
         val path = "users/$uid/riskPolicies/default"
@@ -158,6 +165,7 @@ class TradingCloudRepository(
     }
 
     fun observeTrades(userId: String): Flow<List<TradeRecord>> = flow {
+        if (!cloudSyncEnabled()) { emit(emptyList()); return@flow }
         val uid = requireUserId()
         check(uid == userId) { "Cross-user observation refused" }
         val path = "users/$uid/trades"
@@ -180,6 +188,7 @@ class TradingCloudRepository(
     }
 
     fun observeDailySummaries(userId: String): Flow<List<DailyPnLSummary>> = flow {
+        if (!cloudSyncEnabled()) { emit(emptyList()); return@flow }
         val uid = requireUserId()
         check(uid == userId) { "Cross-user observation refused" }
         val path = "users/$uid/dailySummaries"
@@ -202,6 +211,7 @@ class TradingCloudRepository(
     }
 
     suspend fun saveStrategy(strategy: StrategyConfig): Result<String> {
+        if (!cloudSyncEnabled()) return Result.failure(IllegalStateException("Cloud Sync is disabled on this device."))
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/strategies"
         return try {
             val uid = requireUserId()
@@ -227,6 +237,7 @@ class TradingCloudRepository(
     }
 
     suspend fun saveRiskPolicy(policy: RiskPolicy): Result<Unit> {
+        if (!cloudSyncEnabled()) return Result.failure(IllegalStateException("Cloud Sync is disabled on this device."))
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/riskPolicies/default"
         return try {
             val uid = requireUserId()
@@ -249,6 +260,7 @@ class TradingCloudRepository(
     }
 
     suspend fun createTrade(trade: TradeRecord): Result<String> {
+        if (!cloudSyncEnabled()) return Result.failure(IllegalStateException("Cloud Sync is disabled on this device."))
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/trades"
         return try {
             val uid = requireUserId()
@@ -272,6 +284,8 @@ class TradingCloudRepository(
         status: TradeStatus,
         pnl: Double
     ): Result<Unit> {
+        if (!cloudSyncEnabled()) return Result.failure(IllegalStateException("Cloud Sync is disabled on this device."))
+        if (!cloudSyncEnabled()) return Result.failure(IllegalStateException("Cloud Sync is disabled on this device."))
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/trades/$tradeId"
         return try {
             val uid = requireUserId()
@@ -296,6 +310,7 @@ class TradingCloudRepository(
     }
 
     suspend fun upsertDailySummary(summary: DailyPnLSummary): Result<Unit> {
+        if (!cloudSyncEnabled()) return Result.failure(IllegalStateException("Cloud Sync is disabled on this device."))
         val dateKey = summary.dateKey.ifBlank { todayDateKey() }
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/dailySummaries/$dateKey"
         return try {
@@ -323,6 +338,7 @@ class TradingCloudRepository(
         executionMode: ExecutionMode,
         markBackupTimestamp: Boolean = false
     ): Result<Unit> {
+        if (!cloudSyncEnabled()) return Result.failure(IllegalStateException("Cloud Sync is disabled on this device."))
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}"
         return try {
             val uid = requireUserId()
