@@ -1,31 +1,22 @@
-# IQAir 1.0.0 Integration & Device Test Plan
+# IQAir bounded Practice read-only gateway
 
-## Current status
+## Implementation boundary
 
-The app branch contains the on-device CPython/Chaquopy scaffold and Kotlin account authorization boundary. This change adds a **broker-payload contract test**, not a live IQ Option connection. IQAir 1.0.0 is an unofficial client for an undocumented WebSocket API and must not be treated as an authorized production integration.
+`iq_engine.practice_gateway.PracticeReadOnlyGateway` is an optional, dependency-injected boundary around IQAir. It does not import IQAir at module import time and can be unit-tested with a fake client. The caller supplies the IQAir client factory only in an environment where the package is installed.
 
-## What this test suite verifies
+## Safety properties
 
-- Broker profile must identify the selected balance.
-- IQAir balance type `4` must be explicitly reported before a Practice snapshot is accepted.
-- A balance record must match the selected profile balance ID.
-- Currency, account ID, numeric balance and available balance must be valid.
-- Real, unknown, missing, mismatched or malformed account data fails closed.
+- One account session per gateway; no concurrent IQAir client instances.
+- Every blocking client call is run on a daemon worker and has a bounded caller wait.
+- A timeout poisons the gateway. It must not be reused or automatically reconnected because Python cannot safely kill a blocked worker thread.
+- The broker must explicitly report `PRACTICE`; profile balance type must equal `4`.
+- Read-only balance/profile access only. Order submission and account switching always raise.
+- No credential persistence or logging is performed by this module.
 
-## Known blockers before live adapter enablement
+## Important limitation
 
-The supplied IQAir 1.0.0 source uses module-global `iqair.global_value.balance_id`. Multiple client instances can therefore interfere with each other. Several methods also contain unbounded busy-wait loops, including portions of `connect()`, `get_balances()`, and `reset_practice_balance()`. Do not call these methods on Android's main thread or expose them to the UI until the fork has bounded timeouts, deterministic shutdown, and single-session ownership.
+A caller timeout does not terminate the underlying worker thread. A hung IQAir WebSocket call may remain alive until process termination. Therefore this gateway is a containment layer for controlled experiments, not proof that IQAir is safe or production-ready. The actual IQAir source still needs a maintained fork with bounded internal waits, instance-scoped balance state, TLS certificate verification, deterministic socket shutdown, and physical ARM64 validation before it is enabled in the Android app.
 
-The package stores the email/password on the client object. Android integration must resolve credentials from Android Keystore-backed storage at runtime and must never persist them in source, preferences, logs, crash reports, or CI.
+## Credentials
 
-## Test stages
-
-1. **CI / host tests:** Python unit tests and Kotlin unit tests; build Debug APK.
-2. **Physical ARM64 runtime:** install Debug APK, verify embedded CPython starts, call `iq_engine.engine.engine_status`, and run candle validation offline.
-3. **Practice read-only integration:** only after the IQAir fork is patched for bounded waits and global session isolation; verify broker-reported account type and balance against the Practice account shown in the official app.
-4. **Practice order test:** separate explicit opt-in test, minimal test stake, broker-reported Practice confirmation immediately before order submission, idempotency key, order status polling with timeout, and post-trade reconciliation. Never run this in ordinary CI.
-5. **Real trading:** disabled. No real-account adapter or order path is included in this test scope.
-
-## Device test record
-
-Record device model, Android version, ABI, APK commit SHA, Python runtime status, connection outcome, broker-reported account type, balance timestamp, reconnect outcome, and test result. Redact account identifiers and never attach credentials or session cookies.
+Resolve credentials from Android Keystore-backed storage immediately before connection. Do not store passwords in Room, DataStore, files, build config, source control, logs, or CI variables. Never request or paste credentials into ChatGPT.
