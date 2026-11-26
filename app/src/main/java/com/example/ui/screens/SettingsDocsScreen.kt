@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -31,6 +32,8 @@ import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -47,6 +50,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +61,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.model.BackendHealthState
+import com.example.broker.AccountType
 import com.example.model.ExecutionMode
 import com.example.model.IntegrationSettings
 import com.example.model.LiveReadinessReport
@@ -105,6 +110,8 @@ fun SettingsDocsScreen(
     val context = LocalContext.current
     val currentMode = ExecutionMode.safeValueOf(userProfile?.executionMode)
     var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedAccountType by rememberSaveable { mutableStateOf(AccountType.PRACTICE) }
+    var accountTypeMenuExpanded by remember { mutableStateOf(false) }
     var traderNameInput by remember(userProfile?.displayName) {
         mutableStateOf(userProfile?.displayName ?: "Local Trader")
     }
@@ -178,6 +185,81 @@ fun SettingsDocsScreen(
                     )
                 }
             } else {
+        // IQ Option account type selector — Practice is the safe default.
+        item {
+            Surface(
+                color = tradingColors.surfaceElevated,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, tradingColors.cyan.copy(alpha = 0.55f)),
+                modifier = Modifier.fillMaxWidth().testTag("iq_account_type_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "IQ Option Account",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "เลือกประเภทบัญชีสำหรับการเชื่อมต่อ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Box {
+                        OutlinedButton(
+                            onClick = { accountTypeMenuExpanded = true },
+                            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("account_type_selector")
+                        ) {
+                            Text(
+                                text = if (selectedAccountType == AccountType.PRACTICE) {
+                                    "Practice Account (ค่าเริ่มต้น)"
+                                } else {
+                                    "Real Account"
+                                },
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = accountTypeMenuExpanded,
+                            onDismissRequest = { accountTypeMenuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Practice Account") },
+                                onClick = {
+                                    selectedAccountType = AccountType.PRACTICE
+                                    accountTypeMenuExpanded = false
+                                },
+                                modifier = Modifier.testTag("account_type_practice")
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Real Account (ต้องยืนยันและผ่านการอนุญาต)") },
+                                onClick = {
+                                    selectedAccountType = AccountType.REAL
+                                    accountTypeMenuExpanded = false
+                                },
+                                modifier = Modifier.testTag("account_type_real")
+                            )
+                        }
+                    }
+                    Text(
+                        text = if (selectedAccountType == AccountType.PRACTICE) {
+                            "โหมด Practice ถูกเลือกอยู่ — เหมาะสำหรับทดสอบระบบ"
+                        } else {
+                            "เลือก Real แล้ว แต่ยังไม่อนุญาตให้ส่งคำสั่งเงินจริงจนกว่า Broker Adapter จะผ่านการตรวจสอบ"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (selectedAccountType == AccountType.PRACTICE) {
+                            tradingColors.bullish
+                        } else {
+                            tradingColors.warning
+                        }
+                    )
+                }
+            }
+        }
+
         // 1. Execution Mode Controller & FastAPI Hybrid Connector
         item {
             Surface(
