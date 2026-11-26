@@ -41,6 +41,12 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Set up Python for Chaquopy build
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
