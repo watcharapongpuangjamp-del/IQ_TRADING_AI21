@@ -15,7 +15,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
-@Entity(tableName = "local_strategy_configs")
+@Entity(tableName = "local_strategy_configs", indices = [Index(value = ["userId"])])
 data class LocalStrategyEntity(@PrimaryKey val id: String, val userId: String, val name: String, val instrument: String, val timeframe: String, val tradeAmount: Double, val expirySeconds: Int, val rsiPeriod: Int, val rsiOversold: Int, val rsiOverbought: Int, val emaFast: Int, val emaSlow: Int, val macdFast: Int, val macdSlow: Int, val macdSignal: Int, val bbPeriod: Int, val bbStdDev: Double, val minConfidence: Int, val active: Boolean, val updatedAtMillis: Long)
 
 @Entity(tableName = "local_risk_policies")
