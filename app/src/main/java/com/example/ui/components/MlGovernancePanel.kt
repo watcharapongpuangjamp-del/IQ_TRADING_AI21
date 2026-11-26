@@ -149,6 +149,16 @@ fun MlGovernancePanel(
                         ),
                         modifier = Modifier.testTag("algo_rf_chip")
                     )
+                    FilterChip(
+                        selected = selectedAlgorithm == "xgb_boosting",
+                        onClick = { selectedAlgorithm = "xgb_boosting" },
+                        label = { Text("XGBoost + Platt") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = tradingColors.cyanContainer,
+                            selectedLabelColor = tradingColors.cyan
+                        ),
+                        modifier = Modifier.testTag("algo_xgb_chip")
+                    )
                 }
 
                 Button(

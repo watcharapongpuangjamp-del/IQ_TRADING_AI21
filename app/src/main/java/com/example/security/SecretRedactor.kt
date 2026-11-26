@@ -12,7 +12,7 @@ object SecretRedactor {
 
     fun redact(input: String?, vararg knownSecrets: String?): String {
         if (input.isNullOrBlank()) return ""
-        var out = input
+        var out: String = input
         for (secret in knownSecrets) {
             val trimmed = secret?.trim().orEmpty()
             if (trimmed.length >= 4) {

@@ -1448,12 +1448,14 @@ class TradingViewModel(
         instrument: String,
         timeframe: Timeframe,
         strategyId: String,
-        stakeAmount: Double
+        stakeAmount: Double,
+        lookbackBars: Int = 360
     ) {
         viewModelScope.launch {
             _isBacktestBusy.value = true
             val baseUrl = integrationSettings.value.backendBaseUrl
             val token = credentialVault.getBackendToken()
+            val clampedBars = lookbackBars.coerceIn(60, 1000)
             if (_backendHealth.value.connected && backendClient.isValidHttpUrl(baseUrl)) {
                 val remote = backendClient.runBacktest(
                     baseUrl = baseUrl,
@@ -1462,12 +1464,12 @@ class TradingViewModel(
                     timeframe = timeframe.code,
                     strategyId = strategyId,
                     stakeAmount = stakeAmount,
-                    lookbackBars = 180
+                    lookbackBars = clampedBars
                 )
                 if (remote.isSuccess) {
                     _backtestReport.value = remote.getOrNull()
                     _isBacktestBusy.value = false
-                    _snackbarMessage.value = "รัน Walk-Forward Backtest (FastAPI) เสร็จสิ้น"
+                    _snackbarMessage.value = "รัน Walk-Forward Backtest (FastAPI, $clampedBars แท่ง) เสร็จสิ้น"
                     return@launch
                 }
             }
@@ -1476,9 +1478,9 @@ class TradingViewModel(
                 _terminalState.value.selectedTimeframe == timeframe &&
                 _terminalState.value.candles.size >= 80
             ) {
-                _terminalState.value.candles
+                _terminalState.value.candles.takeLast(clampedBars)
             } else {
-                simEngine.generateInitialCandles(instrument, timeframe.defaultExpirySec, 180)
+                simEngine.generateInitialCandles(instrument, timeframe.defaultExpirySec, clampedBars)
             }
             val spec = SUPPORTED_INSTRUMENTS.firstOrNull { it.symbol == instrument } ?: SUPPORTED_INSTRUMENTS.first()
             LocalBacktestEngine.runBacktest(

@@ -373,9 +373,9 @@ class TrainModelRequest(BaseModel):
     timeframe: str = Field(default="1m", pattern="^(1m)$")
     algorithm: str = Field(
         default="logistic_regression",
-        pattern="^(logistic_regression|hist_gradient_boosting|random_forest)$",
+        pattern="^(logistic_regression|hist_gradient_boosting|random_forest|xgb_boosting)$",
     )
-    total_bars: int = Field(default=360, ge=220, le=600)
+    total_bars: int = Field(default=360, ge=220, le=1000)
     payout_rate: float = Field(default=0.85, ge=0.50, le=0.98)
     execution_delay_bars: int = Field(default=1, ge=0, le=3)
     max_brier_score: float = Field(default=0.265, ge=0.05, le=0.50)
@@ -602,7 +602,7 @@ class BacktestRunRequest(BaseModel):
     timeframe: str = Field(default="1m", pattern="^(1m|5m|15m)$")
     strategy_id: str = Field(default="regime_adaptive", min_length=2, max_length=64)
     stake_amount: float = Field(default=25.0, ge=1.0, le=100_000.0)
-    lookback_bars: int = Field(default=180, ge=60, le=600)
+    lookback_bars: int = Field(default=180, ge=60, le=1000)
     expiry_bars: int = Field(default=1, ge=1, le=5)
 
 
@@ -686,3 +686,19 @@ class BrokerDryRunResponse(BaseModel):
     capabilities: List[str]
     status_detail: str
     checked_at: datetime
+
+
+class IQAirResponse(BaseModel):
+    success: bool
+    city: str
+    state: str
+    country: str
+    aqi_us: int
+    main_pollution: str
+    temperature_c: float
+    humidity_pct: int
+    wind_speed_ms: float
+    pressure_hpa: float
+    macro_impact_score: float
+    source: str
+    detail: str

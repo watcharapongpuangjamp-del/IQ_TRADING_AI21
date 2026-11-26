@@ -4,6 +4,7 @@ import com.example.model.BackendHealthState
 import com.example.model.BackendOrderSummary
 import com.example.model.BacktestReport
 import com.example.model.BrokerDryRunReport
+import com.example.model.IQAirReport
 import com.example.model.Candle
 import com.example.model.ExecutionMode
 import com.example.model.LiveReadinessReport
@@ -229,6 +230,14 @@ interface FastApiTradingApi {
         @Header("Authorization") authHeader: String?,
         @Body payload: BrokerDryRunRequestDto
     ): Response<BrokerDryRunResponseDto>
+
+    @GET("api/v1/market/iqair")
+    suspend fun getAirQuality(
+        @Header("Authorization") authHeader: String?,
+        @Query("city") city: String = "London",
+        @Query("state") state: String = "London",
+        @Query("country") country: String = "United Kingdom"
+    ): Response<IQAirResponseDto>
 }
 
 class BackendConnectorClient {
@@ -816,6 +825,26 @@ class BackendConnectorClient {
                 if (detail.isNotBlank()) "ML rollback HTTP ${response.code()}: $detail"
                 else "ML rollback HTTP ${response.code()}"
             )
+        }
+    }
+
+    suspend fun fetchAirQuality(
+        baseUrl: String,
+        bearerToken: String?,
+        city: String = "London",
+        state: String = "London",
+        country: String = "United Kingdom"
+    ): Result<IQAirReport> = safeCall {
+        val response = buildApi(baseUrl).getAirQuality(
+            buildAuthHeader(baseUrl, bearerToken),
+            city,
+            state,
+            country
+        )
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!.toDomain()
+        } else {
+            throw IllegalStateException("IQAir HTTP ${response.code()}")
         }
     }
 

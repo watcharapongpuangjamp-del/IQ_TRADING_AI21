@@ -79,8 +79,27 @@ class ModelTrainer:
 
     @staticmethod
     def _build_pipeline(algorithm: str) -> Pipeline:
+        if algorithm == "xgb_boosting":
+            try:
+                from xgboost import XGBClassifier
+                clf: Any = XGBClassifier(
+                    max_depth=4,
+                    learning_rate=0.06,
+                    n_estimators=100,
+                    random_state=42,
+                    eval_metric="logloss",
+                )
+            except ImportError:
+                clf = HistGradientBoostingClassifier(
+                    max_depth=4,
+                    learning_rate=0.06,
+                    max_iter=80,
+                    min_samples_leaf=15,
+                    random_state=42,
+                )
+            return Pipeline([("scaler", StandardScaler()), ("clf", clf)])
         if algorithm == "hist_gradient_boosting":
-            clf: Any = HistGradientBoostingClassifier(
+            clf = HistGradientBoostingClassifier(
                 max_depth=4,
                 learning_rate=0.06,
                 max_iter=80,
@@ -101,7 +120,7 @@ class ModelTrainer:
             clf = LogisticRegression(C=1.0, max_iter=500, random_state=42)
             return Pipeline([("scaler", StandardScaler()), ("clf", clf)])
         raise ValueError(
-            f"Unsupported algorithm '{algorithm}'. Use 'logistic_regression', 'hist_gradient_boosting', or 'random_forest'."
+            f"Unsupported algorithm '{algorithm}'. Use 'logistic_regression', 'hist_gradient_boosting', 'random_forest', or 'xgb_boosting'."
         )
 
     @classmethod

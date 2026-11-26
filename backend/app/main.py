@@ -16,6 +16,7 @@ from app.connectors.simulation import INSTRUMENT_SPECS, SimulationConnector
 from app.database import SessionLocal, engine, ensure_schema_migrations, get_db
 from app.engines.backtest_engine import WalkForwardBacktestEngine
 from app.engines.diagnostics_engine import LiveReadinessEvaluator, SystemDiagnosticsEngine
+from app.engines.iqair_client import IQAirClient
 from app.engines.execution_engine import (
     ExecutionAuthorizationError,
     ExecutionConnectorError,
@@ -46,6 +47,7 @@ from app.schemas import (
     DataQualityReportSchema,
     ExecutionMode,
     HealthResponse,
+    IQAirResponse,
     LiveReadinessResponse,
     MarketIntelligenceResponse,
     ModeSwitchRequest,
@@ -178,6 +180,21 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=reason)
         HistoricalCandleRepository.upsert_candles(db, instrument, timeframe, candles, source=connector.name)
         return [CandleSchema(**c) for c in candles]
+
+    @application.get(
+        "/api/v1/market/iqair",
+        response_model=IQAirResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Market Data"],
+    )
+    async def get_iqair_data(
+        city: str = Query(default="London", min_length=2, max_length=50),
+        state: str = Query(default="London", min_length=2, max_length=50),
+        country: str = Query(default="United Kingdom", min_length=2, max_length=50),
+    ) -> IQAirResponse:
+        client = IQAirClient(api_key=settings.iqair_api_key if hasattr(settings, "iqair_api_key") else None)
+        data = await client.get_city_air_quality(city=city, state=state, country=country)
+        return IQAirResponse(**data)
 
     @application.get(
         "/api/v1/candles/history",

@@ -5,6 +5,7 @@ import com.example.model.BackendOrderSummary
 import com.example.model.BacktestReport
 import com.example.model.BacktestTradeSample
 import com.example.model.BrokerDryRunReport
+import com.example.model.IQAirReport
 import com.example.model.Candle
 import com.example.model.DataQualitySummary
 import com.example.model.DiagnosticCheckItem
@@ -909,5 +910,38 @@ data class BrokerDryRunResponseDto(
         balance = balance,
         capabilities = capabilities,
         statusDetail = status_detail
+    )
+}
+
+@JsonClass(generateAdapter = true)
+data class IQAirResponseDto(
+    val success: Boolean = true,
+    val city: String = "London",
+    val state: String = "London",
+    val country: String = "United Kingdom",
+    val aqi_us: Int = 42,
+    val main_pollution: String = "p2",
+    val temperature_c: Double = 20.0,
+    val humidity_pct: Int = 55,
+    val wind_speed_ms: Double = 3.2,
+    val pressure_hpa: Double = 1013.0,
+    val macro_impact_score: Double = 0.95,
+    val source: String = "iqair_api_v2",
+    val detail: String = ""
+) {
+    fun toDomain(): IQAirReport = IQAirReport(
+        success = success,
+        city = city,
+        state = state,
+        country = country,
+        aqiUs = aqi_us,
+        mainPollution = main_pollution,
+        temperatureC = temperature_c,
+        humidityPct = humidity_pct,
+        windSpeedMs = wind_speed_ms,
+        pressureHpa = pressure_hpa,
+        macroImpactScore = macro_impact_score,
+        source = source,
+        detail = detail
     )
 }

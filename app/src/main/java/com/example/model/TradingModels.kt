@@ -632,3 +632,19 @@ data class BrokerDryRunReport(
     val checkedAtMillis: Long = System.currentTimeMillis()
 )
 
+data class IQAirReport(
+    val success: Boolean = true,
+    val city: String = "London",
+    val state: String = "London",
+    val country: String = "United Kingdom",
+    val aqiUs: Int = 42,
+    val mainPollution: String = "p2",
+    val temperatureC: Double = 20.0,
+    val humidityPct: Int = 55,
+    val windSpeedMs: Double = 3.2,
+    val pressureHpa: Double = 1013.0,
+    val macroImpactScore: Double = 0.95,
+    val source: String = "iqair_api_v2",
+    val detail: String = ""
+)
+

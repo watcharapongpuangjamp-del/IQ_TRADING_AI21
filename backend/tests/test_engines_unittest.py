@@ -16,6 +16,7 @@ from app.domain import (
 )
 from app.engines.backtest_engine import WalkForwardBacktestEngine
 from app.engines.broker_dry_run import run_broker_dry_run_probe, verify_bearer_credentials
+from app.engines.iqair_client import IQAirClient
 from app.engines.learning_engine import LearningEvaluationEngine
 from app.engines.market_intelligence import MarketIntelligenceEngine
 from app.engines.multi_timeframe import MultiTimeframeEngine
@@ -825,6 +826,13 @@ class TestPurePythonEngines(unittest.TestCase):
         )
         self.assertTrue(ok_valid)
         self.assertEqual(code_valid, 200)
+
+    def test_iqair_client(self):
+        client = IQAirClient(api_key="")
+        res = asyncio.run(client.get_city_air_quality("London", "London", "United Kingdom"))
+        self.assertTrue(res["success"])
+        self.assertIn("aqi_us", res)
+        self.assertIn("macro_impact_score", res)
 
 
 if __name__ == "__main__":
