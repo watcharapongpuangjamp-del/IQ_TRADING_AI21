@@ -149,7 +149,7 @@ class TradingViewModel(
     val strategiesState: StateFlow<CloudUiState<List<StrategyConfig>>> =
         localRepository.observeStrategies(currentUserId)
             .map<List<StrategyConfig>, CloudUiState<List<StrategyConfig>>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapFirestoreError(it, "โหลดกลยุทธ์จากคลาวด์ไม่สำเร็จ"))) }
+            .catch { emit(CloudUiState.Error(unwrapDataError(it, "โหลดกลยุทธ์จากฐานข้อมูลในเครื่องไม่สำเร็จ"))) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
 
     val riskPolicyState: StateFlow<CloudUiState<RiskPolicy?>> =
@@ -330,9 +330,6 @@ class TradingViewModel(
                                 lastError = null
                             )
                         )
-                    }
-                    viewModelScope.launch {
-                        flushOfflineSyncQueue(forceRetryFailed = false, notifyUser = false)
                     }
                 },
                 onTick = { tick ->
@@ -821,7 +818,7 @@ class TradingViewModel(
                         status = lifecycle.name,
                         pnl = 0.0,
                         signal = currentSignal,
-                        syncedToCloud = createResult.isSuccess
+                        syncedToCloud = false
                     )
                     refreshBackendExecutionState(settings.backendBaseUrl, backendToken)
                     finishPipeline(
@@ -857,7 +854,7 @@ class TradingViewModel(
                     payoutRate = spec.payoutRate,
                     entryPrice = dto.entry_price,
                     exitPrice = dto.exit_price,
-                    status = TradeStatus.toFirestoreStatus(finalStatus.name),
+                    status = finalStatus.name,
                     pnl = dto.pnl,
                     strategyName = strategy.name,
                     confidenceScore = currentSignal.confidenceScore,
@@ -877,7 +874,7 @@ class TradingViewModel(
                     status = finalStatus.name,
                     pnl = dto.pnl,
                     signal = currentSignal,
-                    syncedToCloud = createSettled.isSuccess
+                    syncedToCloud = false
                 )
 
                 _terminalState.update { it.copy(executionStage = ExecutionStage.PERFORMANCE_EVAL) }
@@ -966,7 +963,7 @@ class TradingViewModel(
                 status = finalStatus.name,
                 pnl = pnl,
                 signal = currentSignal,
-                syncedToCloud = createPendingRes.isSuccess && settleRes.isSuccess
+                syncedToCloud = false
             )
 
             _terminalState.update { it.copy(executionStage = ExecutionStage.PERFORMANCE_EVAL) }
@@ -1117,7 +1114,7 @@ class TradingViewModel(
         status: String,
         pnl: Double,
         signal: SignalAnalysis,
-        syncedToCloud: Boolean = true
+        syncedToCloud: Boolean = false
     ) {
         withContext(Dispatchers.IO) {
             tradingDao.upsertTrade(
@@ -1146,10 +1143,6 @@ class TradingViewModel(
     }
 
     // --- Offline-First Sync Queue & 8-Module Strategy Selector (Phase 6) ---
-
-    fun flushOfflineSyncQueue(forceRetryFailed: Boolean = true, notifyUser: Boolean = true) {
-        if (notifyUser) _snackbarMessage.value = "ข้อมูลถูกจัดเก็บในฐานข้อมูล SQL ภายในเครื่อง ไม่มีคิว Cloud Sync"
-    }
 
     fun refreshStrategyModules() {
         viewModelScope.launch {
