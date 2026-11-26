@@ -21,10 +21,9 @@ class PluginRegistry:
     """Thread-safe metadata registry with immutable built-in entries.
 
     The registry never imports, evaluates, or executes plugin source. Runtime
-    loading must be implemented later behind an isolated sandbox and explicit
+    loading must later be implemented behind an isolated sandbox and explicit
     capability/permission checks.
     """
-
     def __init__(self, builtins: Iterable[PluginManifest] = ()) -> None:
         self._lock = RLock()
         self._items: dict[str, PluginRegistration] = {}
@@ -45,9 +44,32 @@ class PluginRegistry:
             self._items[manifest.plugin_id] = item
             return item
 
+    def mark_validated(self, plugin_id: str) -> PluginRegistration:
+        """Record that external static and sandbox checks passed."""
+        with self._lock:
+            item = self._require(plugin_id)
+            if item.manifest.builtin:
+                return item
+            if item.state not in (PluginState.REGISTERED, PluginState.DISABLED, PluginState.FAILED_VALIDATION):
+                raise PluginRegistryError(f"cannot validate plugin from state {item.state.value}")
+            updated = PluginRegistration(item.manifest, PluginState.VALIDATED)
+            self._items[plugin_id] = updated
+            return updated
+
+    def mark_validation_failed(self, plugin_id: str) -> PluginRegistration:
+        with self._lock:
+            item = self._require(plugin_id)
+            if item.manifest.builtin:
+                raise PluginRegistryError("built-in plugin validation state is immutable")
+            updated = PluginRegistration(item.manifest, PluginState.FAILED_VALIDATION)
+            self._items[plugin_id] = updated
+            return updated
+
     def enable(self, plugin_id: str) -> PluginRegistration:
         with self._lock:
             item = self._require(plugin_id)
+            if not item.manifest.builtin and item.state is not PluginState.VALIDATED:
+                raise PluginRegistryError("plugin must pass validation before enablement")
             updated = PluginRegistration(item.manifest, PluginState.ENABLED)
             self._items[plugin_id] = updated
             return updated
