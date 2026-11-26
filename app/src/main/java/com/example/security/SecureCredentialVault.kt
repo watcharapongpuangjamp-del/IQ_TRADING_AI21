@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.model.IntegrationSettings
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.security.KeyStore
 import javax.crypto.Cipher
@@ -44,6 +45,7 @@ class SecureCredentialVault(context: Context) {
         val NOTIFY_LOCAL = booleanPreferencesKey("notify_local")
         val HAS_BACKEND_TOKEN = booleanPreferencesKey("has_backend_token")
         val HAS_TELEGRAM_TOKEN = booleanPreferencesKey("has_telegram_token")
+        val CLOUD_SYNC_ENABLED = booleanPreferencesKey("cloud_sync_enabled")
     }
 
     val settingsFlow: Flow<IntegrationSettings> = appContext.integrationDataStore.data.map { prefs ->
@@ -56,6 +58,7 @@ class SecureCredentialVault(context: Context) {
             notifyOnRiskStop = prefs[Keys.NOTIFY_RISK] ?: true,
             notifyDailySummary = prefs[Keys.NOTIFY_DAILY] ?: true,
             enableLocalNotifications = prefs[Keys.NOTIFY_LOCAL] ?: true,
+            cloudSyncEnabled = prefs[Keys.CLOUD_SYNC_ENABLED] ?: false,
             hasBackendToken = prefs[Keys.HAS_BACKEND_TOKEN] ?: !getBackendToken().isNullOrBlank(),
             hasTelegramToken = prefs[Keys.HAS_TELEGRAM_TOKEN] ?: !getTelegramBotToken().isNullOrBlank()
         )
@@ -94,6 +97,13 @@ class SecureCredentialVault(context: Context) {
             prefs[Keys.HAS_BACKEND_TOKEN] = !getBackendToken().isNullOrBlank()
             prefs[Keys.HAS_TELEGRAM_TOKEN] = !getTelegramBotToken().isNullOrBlank()
         }
+    }
+
+    suspend fun isCloudSyncEnabled(): Boolean =
+        appContext.integrationDataStore.data.first()[Keys.CLOUD_SYNC_ENABLED] ?: false
+
+    suspend fun setCloudSyncEnabled(enabled: Boolean) {
+        appContext.integrationDataStore.edit { prefs -> prefs[Keys.CLOUD_SYNC_ENABLED] = enabled }
     }
 
     fun getBackendToken(): String? = readEncryptedSecret(KEY_BACKEND_TOKEN)
