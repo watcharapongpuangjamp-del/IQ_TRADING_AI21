@@ -65,7 +65,7 @@ jobs:
       - name: Verify Local-Only runtime dependencies
         run: |
           gradle :app:dependencies --configuration debugRuntimeClasspath > runtime-dependencies.txt
-          if grep -Eiq 'com\\.google\\.firebase|androidx\\.credentials|com\\.google\\.android\\.libraries\\.identity\\.googleid' runtime-dependencies.txt; then
+          if grep -Eiq 'com\.google\.firebase|androidx\.credentials|com\.google\.android\.libraries\.identity\.googleid' runtime-dependencies.txt; then
             cat runtime-dependencies.txt
             echo "Unexpected Firebase or Google Sign-In runtime dependency detected."
             exit 1
