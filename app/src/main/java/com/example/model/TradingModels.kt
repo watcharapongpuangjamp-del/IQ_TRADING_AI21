@@ -20,13 +20,6 @@ enum class TradeStatus {
     OPEN, WON, LOST, REJECTED, CANCELLED, PENDING, FAILED, UNKNOWN;
     companion object {
         fun safeValueOf(raw: String?): TradeStatus = entries.firstOrNull { it.name == raw } ?: OPEN
-        fun toFirestoreStatus(raw: String?): String = when (safeValueOf(raw)) {
-            WON -> WON.name
-            LOST -> LOST.name
-            REJECTED -> REJECTED.name
-            CANCELLED, FAILED -> CANCELLED.name
-            OPEN, PENDING, UNKNOWN -> OPEN.name
-        }
     }
 }
 
@@ -421,10 +414,3 @@ data class WebSocketConnectionState(
     val lastError: String? = null
 )
 
-data class OfflineSyncStatus(
-    val pendingCount: Int = 0,
-    val failedCount: Int = 0,
-    val isFlushing: Boolean = false,
-    val lastSyncedAtMillis: Long? = null,
-    val lastError: String? = null
-)
