@@ -5,7 +5,6 @@ from enum import Enum
 import re
 from typing import Tuple
 
-
 _PLUGIN_ID = re.compile(r"^[a-z][a-z0-9_.-]{2,79}$")
 _VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+][0-9A-Za-z.-]+)?$")
 _CAPABILITY = re.compile(r"^[a-z][a-z0-9_.-]{1,79}$")
@@ -13,6 +12,7 @@ _CAPABILITY = re.compile(r"^[a-z][a-z0-9_.-]{1,79}$")
 
 class PluginState(str, Enum):
     REGISTERED = "REGISTERED"
+    VALIDATED = "VALIDATED"
     ENABLED = "ENABLED"
     DISABLED = "DISABLED"
     FAILED_VALIDATION = "FAILED_VALIDATION"
@@ -20,8 +20,7 @@ class PluginState(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class PluginManifest:
-    """Validated plugin metadata; this is not an executable plugin package."""
-
+    """Validated metadata only; this object is not executable plugin code."""
     plugin_id: str
     version: str
     display_name: str
@@ -38,10 +37,8 @@ class PluginManifest:
             raise ValueError("version must use semantic versioning")
         if not self.display_name.strip():
             raise ValueError("display_name is required")
-        if not self.capabilities:
-            raise ValueError("at least one capability is required")
-        if len(set(self.capabilities)) != len(self.capabilities):
-            raise ValueError("capabilities must be unique")
+        if not self.capabilities or len(set(self.capabilities)) != len(self.capabilities):
+            raise ValueError("capabilities must be non-empty and unique")
         if any(not _CAPABILITY.fullmatch(item) for item in self.capabilities):
             raise ValueError("capabilities must be lowercase identifiers")
         if self.source_digest_sha256 is not None and not re.fullmatch(r"[a-fA-F0-9]{64}", self.source_digest_sha256):
