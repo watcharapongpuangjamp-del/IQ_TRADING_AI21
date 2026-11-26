@@ -70,18 +70,13 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.example.FirebaseBootstrap
-import com.example.R
 import com.example.data.local.TradingDatabase
+import com.example.data.repository.LocalTradingRepository
 import com.example.data.remote.BackendConnectorClient
 import com.example.data.remote.TelegramNotifier
-import com.example.data.repository.TradingCloudRepository
 import com.example.model.RiskPolicy
 import com.example.model.StrategyConfig
 import com.example.security.SecureCredentialVault
-import com.example.ui.auth.AuthScreen
-import com.example.ui.auth.authStateFlow
-import com.example.ui.auth.signOutUser
 import com.example.ui.notifications.TradingNotificationHelper
 import com.example.ui.screens.PnLDashboardScreen
 import com.example.ui.screens.SettingsDocsScreen
@@ -90,8 +85,6 @@ import com.example.ui.screens.TerminalScreen
 import com.example.ui.theme.LocalTradingColors
 import com.example.viewmodel.CloudUiState
 import com.example.viewmodel.TradingViewModel
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FirebaseFirestore
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -143,107 +136,12 @@ private val NAV_ITEMS = listOf(
 )
 
 @Composable
-fun AppNavigation(auth: FirebaseAuth? = null) {
-    val context = LocalContext.current
-    var initAttempt by remember { mutableIntStateOf(0) }
-    val resolvedAuth = remember(auth, context, initAttempt) {
-        auth ?: FirebaseBootstrap.getAuthOrNull(context)
-    }
-
-    if (resolvedAuth == null) {
-        FirebaseConfigMissingScreen(
-            onRetry = { initAttempt++ }
-        )
-        return
-    }
-
-    val currentUser by resolvedAuth.authStateFlow()
-        .collectAsStateWithLifecycle(initialValue = resolvedAuth.currentUser)
-    val user = currentUser
-
-    if (user == null) {
-        AuthScreen(onAuthSuccess = { /* authStateFlow updates automatically */ })
-    } else {
-        key(user.uid) {
-            AuthenticatedTradingShell(
-                currentUserId = user.uid,
-                displayName = user.displayName ?: "Trader",
-                email = user.email
-            )
-        }
-    }
-}
-
-@Composable
-private fun FirebaseConfigMissingScreen(onRetry: () -> Unit) {
-    val tradingColors = LocalTradingColors.current
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(tradingColors.surfaceCanvas)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .padding(24.dp)
-            .testTag("firebase_config_missing_screen"),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            color = tradingColors.surfaceElevated,
-            shape = RoundedCornerShape(18.dp),
-            border = BorderStroke(1.dp, tradingColors.warning.copy(alpha = 0.5f)),
-            modifier = Modifier.widthIn(max = 520.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.WarningAmber,
-                        contentDescription = "Firebase configuration missing",
-                        tint = tradingColors.warning,
-                        modifier = Modifier.size(28.dp)
-                    )
-                    Text(
-                        text = "ยังไม่ได้ตั้งค่า Firebase ในไฟล์ APK",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                Text(
-                    text = "ไม่พบข้อมูลทรัพยากรจาก app/google-services.json ในบิลด์นี้ (เช่น บิลด์ผ่าน GitHub Actions โดยยังไม่ได้เพิ่ม Secret ชื่อ GOOGLE_SERVICES_JSON) จึงไม่สามารถเริ่มต้น FirebaseApp ได้",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "วิธีแก้ไข:\n1) ไปที่ GitHub Repository → Settings → Secrets and variables → Actions\n2) เพิ่ม Secret ชื่อ GOOGLE_SERVICES_JSON โดยใส่เนื้อหาจากไฟล์ app/google-services.json\n3) สั่งรัน Workflow Build APK ใหม่อีกครั้ง แล้วติดตั้ง APK ล่าสุด",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Button(
-                    onClick = onRetry,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = tradingColors.bullish,
-                        contentColor = tradingColors.surfaceCanvas
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("retry_firebase_init_button")
-                ) {
-                    Text(
-                        text = "ลองตรวจสอบการตั้งค่าอีกครั้ง",
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-    }
+fun AppNavigation() {
+    AuthenticatedTradingShell(
+        currentUserId = LocalTradingRepository.LOCAL_USER_ID,
+        displayName = "Trader",
+        email = null
+    )
 }
 
 @Composable
@@ -259,11 +157,10 @@ private fun AuthenticatedTradingShell(
                 val app = checkNotNull(this[APPLICATION_KEY]) {
                     "APPLICATION_KEY missing from CreationExtras"
                 }
-                val databaseId = app.getString(R.string.firestore_database_id)
-                val db = FirebaseFirestore.getInstance(databaseId)
                 val vault = SecureCredentialVault(app)
+                val localRepository = LocalTradingRepository(TradingDatabase.getInstance(app).tradingDao())
                 TradingViewModel(
-                    cloudRepository = TradingCloudRepository(db, cloudSyncEnabled = vault::isCloudSyncEnabled),
+                    localRepository = localRepository,
                     tradingDao = TradingDatabase.getInstance(app).tradingDao(),
                     credentialVault = vault,
                     telegramNotifier = TelegramNotifier(),
@@ -278,8 +175,6 @@ private fun AuthenticatedTradingShell(
     )
 
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val credentialManager = remember(context) { CredentialManager.create(context) }
     val tradingColors = LocalTradingColors.current
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -492,9 +387,7 @@ private fun AuthenticatedTradingShell(
                                 onSendTelegramTest = viewModel::sendTelegramTest,
                                 onSendLocalNotificationTest = viewModel::sendLocalNotificationTest,
                                 onSyncCloudNow = viewModel::syncCloudBackupNow,
-                                onSignOut = {
-                                    signOutUser(credentialManager, scope)
-                                }
+                                onSignOut = {}
                             )
                         }
                     }
