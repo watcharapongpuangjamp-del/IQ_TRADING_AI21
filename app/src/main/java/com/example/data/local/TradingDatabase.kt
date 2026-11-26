@@ -109,6 +109,12 @@ interface TradingDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertTrade(trade: LocalTradeCacheEntity)
 
+    @Query("SELECT * FROM local_trade_logs WHERE userId = :userId ORDER BY createdAtMillis DESC")
+    fun observeAllLocalTrades(userId: String): Flow<List<LocalTradeCacheEntity>>
+
+    @Query("UPDATE local_trade_logs SET exitPrice = :exitPrice, status = :status, pnl = :pnl WHERE tradeId = :tradeId")
+    suspend fun settleLocalTrade(tradeId: String, exitPrice: Double, status: String, pnl: Double)
+
     @Query("UPDATE local_trade_logs SET syncedToCloud = 1 WHERE tradeId = :tradeId")
     suspend fun markSynced(tradeId: String)
 
