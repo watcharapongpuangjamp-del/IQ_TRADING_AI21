@@ -15,6 +15,20 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
+@Entity(tableName = "legacy_local_queue_archive", indices = [Index(value = ["userId", "status", "nextRetryMillis"])])
+data class LegacyLocalQueueArchiveEntity(
+    @PrimaryKey val queueId: String,
+    val userId: String,
+    val entityType: String,
+    val documentId: String,
+    val payloadJson: String,
+    val clientModifiedMillis: Long,
+    val retryCount: Int,
+    val nextRetryMillis: Long,
+    val lastError: String?,
+    val status: String
+)
+
 @Entity(tableName = "local_strategy_configs", indices = [Index(value = ["userId"])])
 data class LocalStrategyEntity(@PrimaryKey val id: String, val userId: String, val name: String, val instrument: String, val timeframe: String, val tradeAmount: Double, val expirySeconds: Int, val rsiPeriod: Int, val rsiOversold: Int, val rsiOverbought: Int, val emaFast: Int, val emaSlow: Int, val macdFast: Int, val macdSlow: Int, val macdSignal: Int, val bbPeriod: Int, val bbStdDev: Double, val minConfidence: Int, val active: Boolean, val updatedAtMillis: Long)
 
@@ -113,7 +127,7 @@ interface TradingDao {
 }
 
 @Database(
-    entities = [CachedCandleEntity::class, LocalTradeCacheEntity::class, LocalStrategyEntity::class, LocalRiskPolicyEntity::class, LocalUserProfileEntity::class, LocalDailySummaryEntity::class],
+    entities = [CachedCandleEntity::class, LocalTradeCacheEntity::class, LocalStrategyEntity::class, LocalRiskPolicyEntity::class, LocalUserProfileEntity::class, LocalDailySummaryEntity::class, LegacyLocalQueueArchiveEntity::class],
     version = 4,
     exportSchema = false
 )
@@ -164,6 +178,9 @@ abstract class TradingDatabase : RoomDatabase() {
                 db.execSQL("INSERT INTO local_trade_logs_new (tradeId,userId,instrument,timeframe,direction,mode,amount,payoutRate,entryPrice,exitPrice,status,pnl,strategyName,confidenceScore,calibratedProbability,explanation,createdAtMillis) SELECT tradeId,userId,instrument,timeframe,direction,mode,amount,payoutRate,entryPrice,exitPrice,status,pnl,strategyName,confidenceScore,calibratedProbability,explanation,createdAtMillis FROM local_trade_logs")
                 db.execSQL("DROP TABLE local_trade_logs")
                 db.execSQL("ALTER TABLE local_trade_logs_new RENAME TO local_trade_logs")
+                db.execSQL("CREATE TABLE IF NOT EXISTS legacy_local_queue_archive (queueId TEXT NOT NULL PRIMARY KEY, userId TEXT NOT NULL, entityType TEXT NOT NULL, documentId TEXT NOT NULL, payloadJson TEXT NOT NULL, clientModifiedMillis INTEGER NOT NULL, retryCount INTEGER NOT NULL, nextRetryMillis INTEGER NOT NULL, lastError TEXT, status TEXT NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_legacy_local_queue_archive_userId_status_nextRetryMillis ON legacy_local_queue_archive(userId, status, nextRetryMillis)")
+                db.execSQL("INSERT OR IGNORE INTO legacy_local_queue_archive (queueId,userId,entityType,documentId,payloadJson,clientModifiedMillis,retryCount,nextRetryMillis,lastError,status) SELECT queueId,userId,entityType,documentId,payloadJson,clientModifiedMillis,retryCount,nextRetryMillis,lastError,status FROM sync_queue")
                 db.execSQL("DROP TABLE IF EXISTS sync_queue")
             }
         }
