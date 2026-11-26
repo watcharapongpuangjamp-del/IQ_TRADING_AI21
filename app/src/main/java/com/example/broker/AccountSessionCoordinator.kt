@@ -78,4 +78,4 @@ class AccountSessionCoordinator(private val connector: BrokerConnector) {
 }
 
 class AccountTypeMismatchException(val requested: AccountType, val reported: AccountType) :
-    IllegalStateException("Requested ${requested} but broker reported ${reported}.")
+    IllegalStateException("Account type mismatch: requested ${requested} but broker reported ${reported}.")
