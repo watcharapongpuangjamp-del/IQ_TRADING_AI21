@@ -55,6 +55,5 @@ object FirebaseBootstrap {
 class IQTradingApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        FirebaseBootstrap.ensureInitialized(this)
     }
 }
