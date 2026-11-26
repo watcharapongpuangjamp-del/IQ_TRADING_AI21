@@ -64,7 +64,7 @@ jobs:
 
       - name: Run Quantitative & Risk Engine Unit Tests
         if: ${{ inputs.run_tests != 'false' }}
-        run: gradle :app:testDebugUnitTest --tests "com.example.TradingEnginesUnitTest"
+        run: gradle :app:testDebugUnitTest
 
       - name: Build Debug APK
         run: gradle :app:assembleDebug
