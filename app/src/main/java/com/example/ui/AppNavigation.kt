@@ -335,8 +335,7 @@ private fun AuthenticatedTradingShell(
                                 onStepReplay = viewModel::stepReplay,
                                 onResetReplay = viewModel::resetReplay,
                                 onExitReplay = viewModel::exitReplayMode,
-                                onReconcileOrders = { viewModel.reconcileBackendOrders() },
-                                onFlushSyncQueue = { viewModel.flushOfflineSyncQueue(forceRetryFailed = true, notifyUser = true) }
+                                onReconcileOrders = { viewModel.reconcileBackendOrders() }
                             )
                         }
                         composable(NavRoutes.STRATEGY) {
