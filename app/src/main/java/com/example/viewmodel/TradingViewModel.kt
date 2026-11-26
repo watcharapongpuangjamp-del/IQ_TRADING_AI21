@@ -3,6 +3,7 @@ package com.example.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.broker.AccountType
 import com.example.data.remote.BackendConnectorClient
 import com.example.data.remote.MarketIntelligenceResponseDto
 import com.example.data.remote.OrderSubmitRequestDto
@@ -123,6 +124,18 @@ class TradingViewModel(
 
     private val simEngine = MarketSimulationEngine()
     private val _terminalState = MutableStateFlow(TerminalUiState())
+
+    private val _selectedAccountType = MutableStateFlow(AccountType.PRACTICE)
+    val selectedAccountType: StateFlow<AccountType> = _selectedAccountType.asStateFlow()
+
+    fun selectAccountType(accountType: AccountType) {
+        _selectedAccountType.value = accountType
+        _snackbarMessage.value = if (accountType == AccountType.PRACTICE) {
+            "เลือก Practice Account แล้ว"
+        } else {
+            "เลือก Real Account แล้ว — การส่งคำสั่งเงินจริงยังถูกล็อก"
+        }
+    }
     val terminalState: StateFlow<TerminalUiState> = _terminalState.asStateFlow()
 
     private val _backendHealth = MutableStateFlow(BackendHealthState())
