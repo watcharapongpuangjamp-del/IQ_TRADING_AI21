@@ -47,7 +47,8 @@ class LocalTradingRepository(private val dao: TradingDao) {
     fun observeUserProfile(): Flow<UserProfile?> = dao.observeUserProfile().map { row ->
         row?.let { UserProfile(
             id = it.id, userId = it.userId, displayName = it.displayName,
-            executionMode = it.executionMode, simulationBalance = it.simulationBalance
+            executionMode = it.executionMode, simulationBalance = it.simulationBalance,
+            updatedAtMillis = it.updatedAtMillis
         ) }
     }
 
@@ -114,7 +115,7 @@ class LocalTradingRepository(private val dao: TradingDao) {
         tradeAmount = tradeAmount, expirySeconds = expirySeconds, rsiPeriod = rsiPeriod,
         rsiOversold = rsiOversold, rsiOverbought = rsiOverbought, emaFast = emaFast, emaSlow = emaSlow,
         macdFast = macdFast, macdSlow = macdSlow, macdSignal = macdSignal, bbPeriod = bbPeriod,
-        bbStdDev = bbStdDev, minConfidence = minConfidence, active = active
+        bbStdDev = bbStdDev, minConfidence = minConfidence, active = active, updatedAtMillis = updatedAtMillis
     )
 
     private fun RiskPolicy.toLocal() = LocalRiskPolicyEntity(
@@ -129,7 +130,7 @@ class LocalTradingRepository(private val dao: TradingDao) {
         id = id, userId = userId, maxTradeAmount = maxTradeAmount, maxDailyLoss = maxDailyLoss,
         maxConsecutiveLosses = maxConsecutiveLosses, maxDailyTrades = maxDailyTrades,
         maxPortfolioExposure = maxPortfolioExposure, cooldownMinutes = cooldownMinutes,
-        emergencyStopped = emergencyStopped, autoTradeEnabled = autoTradeEnabled
+        emergencyStopped = emergencyStopped, autoTradeEnabled = autoTradeEnabled, updatedAtMillis = updatedAtMillis
     )
 
     private fun TradeRecord.toLocal(createdAt: Long) = LocalTradeCacheEntity(
@@ -146,7 +147,7 @@ class LocalTradingRepository(private val dao: TradingDao) {
         direction = direction, mode = mode, amount = amount, payoutRate = payoutRate,
         entryPrice = entryPrice, exitPrice = exitPrice, status = status, pnl = pnl,
         strategyName = strategyName, confidenceScore = confidenceScore,
-        calibratedProbability = calibratedProbability, explanation = explanation
+        calibratedProbability = calibratedProbability, explanation = explanation, createdAtMillis = createdAtMillis
     )
 
     private fun DailyPnLSummary.toLocal() = LocalDailySummaryEntity(
