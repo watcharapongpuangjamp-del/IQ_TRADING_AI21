@@ -321,7 +321,7 @@ fun PnLDashboardScreen(
                 }
             }
         } else {
-            items(trades, key = { it.id.ifBlank { "${it.instrument}_${it.entryPrice}_${it.createdAt}" } }) { trade ->
+            items(trades, key = { it.id.ifBlank { "${it.instrument}_${it.entryPrice}_${it.createdAtMillis}" } }) { trade ->
                 val statusEnum = TradeStatus.safeValueOf(trade.status)
                 val statusColor = when (statusEnum) {
                     TradeStatus.WON -> tradingColors.bullish
@@ -379,9 +379,9 @@ fun PnLDashboardScreen(
     }
 
     selectedTrade?.let { trade ->
-        val timeText = trade.createdAt?.toDate()?.let {
-            SimpleDateFormat("dd MMM HH:mm:ss", Locale.getDefault()).format(it)
-        } ?: SimpleDateFormat("dd MMM HH:mm:ss", Locale.getDefault()).format(Date())
+        val timeText = SimpleDateFormat("dd MMM HH:mm:ss", Locale.getDefault()).format(
+            Date(trade.createdAtMillis.takeIf { it > 0L } ?: System.currentTimeMillis())
+        )
 
         AlertDialog(
             onDismissRequest = { selectedTrade = null },
