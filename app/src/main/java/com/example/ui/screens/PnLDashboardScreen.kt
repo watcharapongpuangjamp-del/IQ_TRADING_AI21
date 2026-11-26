@@ -1,26 +1,44 @@
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Analytics
+import androidx.compose.material.icons.rounded.Clear
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -33,14 +51,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.width
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedButton
+import com.example.engine.TradeJournalExporter
 import com.example.model.BackendOrderSummary
 import com.example.model.DailyPnLSummary
 import com.example.model.OrderLifecycleEvent
@@ -69,11 +84,47 @@ fun PnLDashboardScreen(
     onReconcileOrders: (String?) -> Unit = {},
     onSelectBackendOrder: (String) -> Unit = {},
     onClearOrderEvents: () -> Unit = {},
+    onExportFeedback: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val tradingColors = LocalTradingColors.current
     var selectedTrade by remember { mutableStateOf<TradeRecord?>(null) }
     var selectedBackendOrder by remember { mutableStateOf<BackendOrderSummary?>(null) }
+    var journalQuery by remember { mutableStateOf("") }
+    var journalStatusFilter by remember { mutableStateOf(TradeJournalExporter.FILTER_ALL) }
+
+    val filteredTrades = remember(trades, journalQuery, journalStatusFilter) {
+        TradeJournalExporter.filterTrades(trades, journalQuery, journalStatusFilter)
+    }
+
+    fun writeUriUtf8(uri: Uri, content: String, label: String) {
+        runCatching {
+            val stream = context.contentResolver.openOutputStream(uri)
+                ?: error("ไม่สามารถเปิดไฟล์ปลายทางได้")
+            stream.use { it.write(content.toByteArray(Charsets.UTF_8)) }
+        }.onSuccess {
+            onExportFeedback("ส่งออกสมุดบันทึก $label (${filteredTrades.size} รายการ) สำเร็จ")
+        }.onFailure { err ->
+            onExportFeedback("ส่งออก $label ไม่สำเร็จ: ${err.localizedMessage}")
+        }
+    }
+
+    val csvExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        if (uri != null) {
+            writeUriUtf8(uri, TradeJournalExporter.toCsv(filteredTrades), "CSV")
+        }
+    }
+
+    val jsonExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            writeUriUtf8(uri, TradeJournalExporter.toJson(filteredTrades), "JSON")
+        }
+    }
 
     val todaySummary = dailySummaries.firstOrNull { it.dateKey == todayDateKey }
     val todayPnl = todaySummary?.netPnl ?: 0.0
@@ -294,16 +345,115 @@ fun PnLDashboardScreen(
             }
         }
 
-        // Trade History Header
+        // Trade Journal Header, Filter & Zero-Permission Export
         item {
-            Text(
-                text = "ประวัติการส่งคำสั่งล่าสุด (${trades.size})",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onBackground
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "สมุดบันทึกการเทรด (${filteredTrades.size}/${trades.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                csvExportLauncher.launch("iq_trade_journal_$todayDateKey.csv")
+                            },
+                            enabled = filteredTrades.isNotEmpty(),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("export_journal_csv_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Download,
+                                contentDescription = "ส่งออก CSV",
+                                tint = tradingColors.cyan
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("CSV", style = MaterialTheme.typography.labelMedium)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                jsonExportLauncher.launch("iq_trade_journal_$todayDateKey.json")
+                            },
+                            enabled = filteredTrades.isNotEmpty(),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("export_journal_json_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Download,
+                                contentDescription = "ส่งออก JSON",
+                                tint = tradingColors.bullish
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("JSON", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = journalQuery,
+                    onValueChange = { journalQuery = it },
+                    singleLine = true,
+                    placeholder = { Text("ค้นหาคู่เงิน, กลยุทธ์, Regime...") },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Search,
+                            contentDescription = "ค้นหาสมุดบันทึก"
+                        )
+                    },
+                    trailingIcon = {
+                        if (journalQuery.isNotEmpty()) {
+                            IconButton(onClick = { journalQuery = "" }) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Clear,
+                                    contentDescription = "ล้างคำค้นหา"
+                                )
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("journal_search_input")
+                )
+
+                val statusOptions = listOf(
+                    TradeJournalExporter.FILTER_ALL to "All",
+                    TradeJournalExporter.FILTER_WON to "WON",
+                    TradeJournalExporter.FILTER_LOST to "LOST",
+                    TradeJournalExporter.FILTER_OPEN to "OPEN"
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    statusOptions.forEach { (code, label) ->
+                        FilterChip(
+                            selected = journalStatusFilter == code,
+                            onClick = { journalStatusFilter = code },
+                            label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = tradingColors.cyanContainer,
+                                selectedLabelColor = tradingColors.cyan
+                            ),
+                            modifier = Modifier.testTag("journal_filter_${code.lowercase()}")
+                        )
+                    }
+                }
+            }
         }
 
-        if (trades.isEmpty()) {
+        if (filteredTrades.isEmpty()) {
             item {
                 Surface(
                     color = tradingColors.surfaceElevated,
@@ -322,12 +472,16 @@ fun PnLDashboardScreen(
                             tint = tradingColors.cyan
                         )
                         Text(
-                            text = "ยังไม่มีประวัติคำสั่งซื้อขาย",
+                            text = if (trades.isEmpty()) "ยังไม่มีประวัติคำสั่งซื้อขาย" else "ไม่พบรายการที่ตรงกับตัวกรอง",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "กลับไปที่หน้า Terminal แล้วกด SIM CALL/PUT หรือเปิด Auto-Trade เพื่อเริ่มต้น",
+                            text = if (trades.isEmpty()) {
+                                "กลับไปที่หน้า Terminal แล้วกด SIM CALL/PUT หรือเปิด Auto-Trade เพื่อเริ่มต้น"
+                            } else {
+                                "ลองเปลี่ยนคำค้นหาหรือเลือกตัวกรอง All เพื่อดูรายการทั้งหมด"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -335,7 +489,7 @@ fun PnLDashboardScreen(
                 }
             }
         } else {
-            items(trades, key = { it.id.ifBlank { "${it.instrument}_${it.entryPrice}_${it.createdAtMillis}" } }) { trade ->
+            items(filteredTrades, key = { it.id.ifBlank { "${it.instrument}_${it.entryPrice}_${it.createdAtMillis}" } }) { trade ->
                 val statusEnum = TradeStatus.safeValueOf(trade.status)
                 val statusColor = when (statusEnum) {
                     TradeStatus.WON -> tradingColors.bullish

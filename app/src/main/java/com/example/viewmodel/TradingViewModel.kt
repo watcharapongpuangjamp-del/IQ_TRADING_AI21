@@ -22,6 +22,7 @@ import com.example.engine.TechnicalAnalysisEngine
 import com.example.model.BackendHealthState
 import com.example.model.BackendOrderSummary
 import com.example.model.BacktestReport
+import com.example.model.BrokerDryRunReport
 import com.example.model.Candle
 import com.example.model.DailyPnLSummary
 import com.example.model.DataQualitySummary
@@ -55,6 +56,7 @@ import com.example.model.TradeRecord
 import com.example.model.TradeStatus
 import com.example.model.UserProfile
 import com.example.model.WebSocketConnectionState
+import com.example.security.SecretRedactor
 import com.example.security.SecureCredentialVault
 import com.example.ui.notifications.TradingNotificationHelper
 import kotlinx.coroutines.CancellationException
@@ -204,6 +206,12 @@ class TradingViewModel(
     private val _isDiagnosticsBusy = MutableStateFlow(false)
     val isDiagnosticsBusy: StateFlow<Boolean> = _isDiagnosticsBusy.asStateFlow()
 
+    private val _brokerDryRunReport = MutableStateFlow<BrokerDryRunReport?>(null)
+    val brokerDryRunReport: StateFlow<BrokerDryRunReport?> = _brokerDryRunReport.asStateFlow()
+
+    private val _isDryRunBusy = MutableStateFlow(false)
+    val isDryRunBusy: StateFlow<Boolean> = _isDryRunBusy.asStateFlow()
+
     val liveReadinessReport: StateFlow<LiveReadinessReport> =
         combine(
             _backendHealth,
@@ -241,6 +249,10 @@ class TradingViewModel(
 
     fun clearSnackbar() {
         _snackbarMessage.value = null
+    }
+
+    fun notifyMessage(message: String) {
+        _snackbarMessage.value = message
     }
 
     fun selectInstrument(symbol: String) {
@@ -832,9 +844,10 @@ class TradingViewModel(
                 )
                 if (remoteSubmit.isFailure) {
                     refreshBackendExecutionState(settings.backendBaseUrl, backendToken)
+                    val safeErr = SecretRedactor.redact(remoteSubmit.exceptionOrNull()?.localizedMessage, backendToken)
                     finishPipeline(
                         ExecutionStage.IDLE,
-                        "คำสั่งถูกปฏิเสธโดย Backend: ${remoteSubmit.exceptionOrNull()?.localizedMessage}"
+                        "คำสั่งถูกปฏิเสธโดย Backend: $safeErr"
                     )
                     return
                 }
@@ -1535,6 +1548,55 @@ class TradingViewModel(
         }
     }
 
+    fun runBrokerDryRun() {
+        viewModelScope.launch {
+            _isDryRunBusy.value = true
+            val term = _terminalState.value
+            val baseUrl = integrationSettings.value.backendBaseUrl
+            val token = credentialVault.getBackendToken()
+            val report = if (_backendHealth.value.connected && backendClient.isValidHttpUrl(baseUrl)) {
+                backendClient.runBrokerDryRun(
+                    baseUrl = baseUrl,
+                    bearerToken = token,
+                    instrument = term.selectedInstrument
+                ).getOrElse { err ->
+                    BrokerDryRunReport(
+                        connectorName = _backendHealth.value.connectorName,
+                        connected = false,
+                        dryRunPassed = false,
+                        liveAuthorized = false,
+                        simulationLocked = true,
+                        latencyMs = 0.0,
+                        marketPrice = term.candles.lastOrNull()?.close ?: 0.0,
+                        balance = currentBalance(),
+                        capabilities = _backendHealth.value.supportedCapabilities,
+                        statusDetail = "Broker Dry-Run ไม่สำเร็จ (SIM Locked): ${SecretRedactor.redact(err.localizedMessage, token)}"
+                    )
+                }
+            } else {
+                BrokerDryRunReport(
+                    connectorName = "Local Simulation Engine",
+                    connected = false,
+                    dryRunPassed = term.candles.isNotEmpty(),
+                    liveAuthorized = false,
+                    simulationLocked = true,
+                    latencyMs = 1.0,
+                    marketPrice = term.candles.lastOrNull()?.close ?: 0.0,
+                    balance = currentBalance(),
+                    capabilities = listOf("SIMULATION_STREAM", "TECHNICAL_ANALYSIS", "PAPER_ORDERS"),
+                    statusDetail = "Local Simulation Engine พร้อมทำงานแบบ Non-Executing • ยังไม่ได้เชื่อมต่อ Remote Broker และล็อกที่ SIMULATION"
+                )
+            }
+            _brokerDryRunReport.value = report
+            _isDryRunBusy.value = false
+            _snackbarMessage.value = if (report.dryRunPassed) {
+                "Broker Dry-Run ผ่าน (${report.connectorName} • ${String.format("%.1f", report.latencyMs)}ms • SIM Locked)"
+            } else {
+                "Broker Dry-Run ไม่ผ่าน — คงโหมด SIMULATION ไว้ปลอดภัย"
+            }
+        }
+    }
+
     fun resetSimulationBalance() {
         viewModelScope.launch {
             localRepository.updateUserBalanceAndMode(currentUserId, 10000.0, ExecutionMode.SIMULATION, markSavedTimestamp = true)
@@ -1563,6 +1625,16 @@ class TradingViewModel(
         newTelegramBotToken: String?
     ) {
         viewModelScope.launch {
+            val willHaveToken = !newBackendToken.isNullOrBlank() ||
+                !credentialVault.getBackendToken().isNullOrBlank()
+            if (backendBaseUrl.isNotBlank() && !backendClient.isSafeTokenTransport(backendBaseUrl, willHaveToken)) {
+                _snackbarMessage.value = "คำเตือนความปลอดภัย: ต้องใช้ https:// เมื่อส่ง Bearer Token ไปยังโฮสต์ภายนอก"
+                return@launch
+            }
+            if (backendWsUrl.isNotBlank() && !backendClient.isSafeTokenTransport(backendWsUrl, willHaveToken)) {
+                _snackbarMessage.value = "คำเตือนความปลอดภัย: ต้องใช้ wss:// เมื่อส่ง Bearer Token ไปยัง WebSocket ภายนอก"
+                return@launch
+            }
             credentialVault.saveIntegrationSettings(
                 backendBaseUrl = backendBaseUrl,
                 backendWsUrl = backendWsUrl,
@@ -1575,7 +1647,7 @@ class TradingViewModel(
                 newTelegramBotToken = newTelegramBotToken,
                 enableLocalNotifications = enableLocalNotifications
             )
-            _snackbarMessage.value = "เข้ารหัสและบันทึกการตั้งค่าแล้ว"
+            _snackbarMessage.value = "เข้ารหัส Keystore AES-256-GCM และบันทึกการตั้งค่าแล้ว"
             testBackendConnection()
             startMarketStream()
         }

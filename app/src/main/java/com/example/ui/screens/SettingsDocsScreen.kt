@@ -57,6 +57,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.model.BackendHealthState
+import com.example.model.BrokerDryRunReport
 import com.example.model.ExecutionMode
 import com.example.model.IntegrationSettings
 import com.example.model.LiveReadinessReport
@@ -81,6 +82,9 @@ fun SettingsDocsScreen(
     diagnosticsReport: SystemDiagnosticsReport? = null,
     isDiagnosticsBusy: Boolean = false,
     onRunDiagnostics: () -> Unit = {},
+    dryRunReport: BrokerDryRunReport? = null,
+    isDryRunBusy: Boolean = false,
+    onRunBrokerDryRun: () -> Unit = {},
     onSwitchMode: (ExecutionMode, Boolean) -> Unit,
     onResetBalance: () -> Unit,
     onSaveIntegrations: (
@@ -174,7 +178,10 @@ fun SettingsDocsScreen(
                         riskPolicy = riskPolicy,
                         backendHealth = backendHealth,
                         onRunDiagnostics = onRunDiagnostics,
-                        onSwitchMode = onSwitchMode
+                        onSwitchMode = onSwitchMode,
+                        dryRunReport = dryRunReport,
+                        isDryRunBusy = isDryRunBusy,
+                        onRunBrokerDryRun = onRunBrokerDryRun
                     )
                 }
             } else {

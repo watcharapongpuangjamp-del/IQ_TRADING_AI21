@@ -4,6 +4,7 @@ import com.example.model.AlignmentState
 import com.example.model.BackendOrderSummary
 import com.example.model.BacktestReport
 import com.example.model.BacktestTradeSample
+import com.example.model.BrokerDryRunReport
 import com.example.model.Candle
 import com.example.model.DataQualitySummary
 import com.example.model.DiagnosticCheckItem
@@ -878,3 +879,35 @@ data class SystemDiagnosticsResponseDto(
     )
 }
 
+@JsonClass(generateAdapter = true)
+data class BrokerDryRunRequestDto(
+    val instrument: String = "EUR/USD"
+)
+
+@JsonClass(generateAdapter = true)
+data class BrokerDryRunResponseDto(
+    val connector_name: String = "simulation_connector",
+    val connected: Boolean = false,
+    val dry_run_passed: Boolean = false,
+    val live_authorized: Boolean = false,
+    val simulation_locked: Boolean = true,
+    val latency_ms: Double = 0.0,
+    val market_price: Double = 0.0,
+    val balance: Double = 0.0,
+    val capabilities: List<String> = emptyList(),
+    val status_detail: String = "",
+    val checked_at: String = ""
+) {
+    fun toDomain(): BrokerDryRunReport = BrokerDryRunReport(
+        connectorName = connector_name,
+        connected = connected,
+        dryRunPassed = dry_run_passed,
+        liveAuthorized = live_authorized,
+        simulationLocked = simulation_locked,
+        latencyMs = latency_ms,
+        marketPrice = market_price,
+        balance = balance,
+        capabilities = capabilities,
+        statusDetail = status_detail
+    )
+}

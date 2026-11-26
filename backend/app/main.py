@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
+from app.connectors.http_broker import HttpBrokerConnector
 from app.connectors.simulation import INSTRUMENT_SPECS, SimulationConnector
 from app.database import SessionLocal, engine, ensure_schema_migrations, get_db
 from app.engines.backtest_engine import WalkForwardBacktestEngine
@@ -37,6 +38,8 @@ from app.repositories.historical_candles import HistoricalCandleRepository
 from app.schemas import (
     BacktestRunRequest,
     BacktestRunResponse,
+    BrokerDryRunRequest,
+    BrokerDryRunResponse,
     CandleHistoryIngestRequest,
     CandleHistoryIngestResponse,
     CandleSchema,
@@ -85,7 +88,15 @@ def seed_initial_records(db: Session) -> None:
 
 def create_app(custom_settings: Settings | None = None) -> FastAPI:
     settings = custom_settings or get_settings()
-    connector = SimulationConnector(initial_balance=10000.0)
+    if settings.broker_adapter.strip().lower() == "http":
+        connector = HttpBrokerConnector(
+            base_url=settings.broker_base_url,
+            api_token=settings.broker_api_token,
+            timeout_seconds=settings.broker_timeout_seconds,
+            allow_live=settings.allow_live_trading,
+        )
+    else:
+        connector = SimulationConnector(initial_balance=10000.0)
     strategy_engine = StrategySelectionEngine()
     replay_engine = SimulatorReplayEngine()
     artifacts_dir = Path(settings.model_artifacts_dir)
@@ -98,17 +109,21 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         ensure_schema_migrations(engine)
+        if settings.broker_adapter.strip().lower() == "http":
+            await connector.connect()
         db = SessionLocal()
         try:
             seed_initial_records(db)
         finally:
             db.close()
         yield
+        if settings.broker_adapter.strip().lower() == "http":
+            await connector.disconnect()
 
     application = FastAPI(
         title=settings.app_name,
-        version="7.0.0",
-        description="IQ Trading AI Hybrid FastAPI Backend (Phase 7 ML Drift Monitoring & Manual Rollback)",
+        version="9.0.0",
+        description="IQ Trading AI Hybrid FastAPI Backend (Phase 9 Broker Contract & Hardening)",
         lifespan=lifespan,
     )
 
@@ -1002,6 +1017,25 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         state = TradeExecutionEngine.get_or_create_state(db)
         report["live_readiness"]["current_mode"] = state.execution_mode
         return SystemDiagnosticsResponse(**report)
+
+    @application.post(
+        "/api/v1/trading/broker-dry-run",
+        response_model=BrokerDryRunResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Safety"],
+    )
+    async def run_broker_dry_run(
+        payload: BrokerDryRunRequest | None = None,
+    ) -> BrokerDryRunResponse:
+        target_instrument = payload.instrument if payload is not None else "EUR/USD"
+        if not INSTRUMENT_PATTERN.match(target_instrument):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid instrument format.")
+        report = await SystemDiagnosticsEngine.run_broker_dry_run(
+            connector=connector,
+            settings=settings,
+            instrument=target_instrument,
+        )
+        return BrokerDryRunResponse(**report)
 
     @application.websocket("/ws/market/{instrument:path}")
     async def market_stream(

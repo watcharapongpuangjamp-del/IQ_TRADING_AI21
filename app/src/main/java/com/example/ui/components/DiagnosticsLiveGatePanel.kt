@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material.icons.rounded.Warning
@@ -38,6 +40,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.model.BackendHealthState
+import com.example.model.BrokerDryRunReport
 import com.example.model.DiagnosticCheckStatus
 import com.example.model.ExecutionMode
 import com.example.model.LiveReadinessReport
@@ -54,7 +57,10 @@ fun DiagnosticsLiveGatePanel(
     backendHealth: BackendHealthState,
     onRunDiagnostics: () -> Unit,
     onSwitchMode: (mode: ExecutionMode, explicitLiveConfirmation: Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    dryRunReport: BrokerDryRunReport? = null,
+    isDryRunBusy: Boolean = false,
+    onRunBrokerDryRun: () -> Unit = {}
 ) {
     val tradingColors = LocalTradingColors.current
     var showConfirmLiveDialog by remember { mutableStateOf(false) }
@@ -295,6 +301,94 @@ fun DiagnosticsLiveGatePanel(
                         fontWeight = FontWeight.SemiBold,
                         color = tradingColors.cyan
                     )
+                }
+
+                OutlinedButton(
+                    onClick = onRunBrokerDryRun,
+                    enabled = !isDryRunBusy,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("run_broker_dry_run_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.NetworkCheck,
+                        contentDescription = "Broker Dry-Run Check",
+                        tint = tradingColors.bullish,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = if (isDryRunBusy) "กำลังทดสอบ Broker Dry-Run..." else "รัน Broker Dry-Run Check (Non-Executing)",
+                        fontWeight = FontWeight.SemiBold,
+                        color = tradingColors.bullish
+                    )
+                }
+
+                AnimatedVisibility(visible = dryRunReport != null) {
+                    dryRunReport?.let { report ->
+                        val statusColor = when {
+                            report.dryRunPassed && report.connected -> tradingColors.bullish
+                            report.dryRunPassed -> tradingColors.cyan
+                            else -> tradingColors.bearish
+                        }
+                        Surface(
+                            color = tradingColors.surfaceCanvas,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, statusColor.copy(alpha = 0.5f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("broker_dry_run_result_card")
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Broker Dry-Run • ${report.connectorName}",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Surface(
+                                        color = statusColor.copy(alpha = 0.16f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = if (report.simulationLocked) "SIM LOCKED" else "LIVE ARMED",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = statusColor,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "Latency: ${String.format("%.1f", report.latencyMs)} ms • Price: ${String.format("%.5f", report.marketPrice)} • Balance: $${String.format("%.2f", report.balance)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = tradingColors.cyan
+                                )
+                                if (report.capabilities.isNotEmpty()) {
+                                    Text(
+                                        text = "Capabilities: ${report.capabilities.joinToString(", ")}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Text(
+                                    text = report.statusDetail,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
 
                 diagnosticsReport?.checks?.forEach { item ->

@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -45,7 +47,8 @@ import kotlin.math.roundToInt
 
 enum class SubPanelIndicator(val label: String) {
     RSI("RSI (14)"),
-    MACD("MACD Histogram")
+    MACD("MACD Hist"),
+    STOCHASTIC("Stoch")
 }
 
 @Composable
@@ -58,6 +61,8 @@ fun CandlestickChartPanel(
     val tradingColors = LocalTradingColors.current
     var showBollinger by remember { mutableStateOf(true) }
     var showEma by remember { mutableStateOf(true) }
+    var showVwap by remember { mutableStateOf(true) }
+    var showSupportResistance by remember { mutableStateOf(true) }
     var subPanel by remember { mutableStateOf(SubPanelIndicator.RSI) }
     var visibleCount by remember { mutableFloatStateOf(42f) }
     var panOffsetCandles by remember { mutableFloatStateOf(0f) }
@@ -72,45 +77,72 @@ fun CandlestickChartPanel(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(
+                selected = showEma,
+                onClick = { showEma = !showEma },
+                label = { Text("EMA", style = MaterialTheme.typography.labelSmall) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = tradingColors.cyanContainer,
+                    selectedLabelColor = tradingColors.cyan
+                ),
+                modifier = Modifier.testTag("toggle_ema_chip")
+            )
+            FilterChip(
+                selected = showBollinger,
+                onClick = { showBollinger = !showBollinger },
+                label = { Text("BB", style = MaterialTheme.typography.labelSmall) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = tradingColors.warningContainer,
+                    selectedLabelColor = tradingColors.warning
+                ),
+                modifier = Modifier.testTag("toggle_bb_chip")
+            )
+            FilterChip(
+                selected = showVwap,
+                onClick = { showVwap = !showVwap },
+                label = { Text("VWAP", style = MaterialTheme.typography.labelSmall) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Color(0xFF4A1D48),
+                    selectedLabelColor = Color(0xFFF472B6)
+                ),
+                modifier = Modifier.testTag("toggle_vwap_chip")
+            )
+            FilterChip(
+                selected = showSupportResistance,
+                onClick = { showSupportResistance = !showSupportResistance },
+                label = { Text("S/R", style = MaterialTheme.typography.labelSmall) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = tradingColors.bullishContainer,
+                    selectedLabelColor = tradingColors.bullish
+                ),
+                modifier = Modifier.testTag("toggle_sr_chip")
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SubPanelIndicator.entries.forEach { ind ->
                 FilterChip(
-                    selected = showEma,
-                    onClick = { showEma = !showEma },
-                    label = { Text("EMA", style = MaterialTheme.typography.labelSmall) },
+                    selected = subPanel == ind,
+                    onClick = { subPanel = ind },
+                    label = { Text(ind.label, style = MaterialTheme.typography.labelSmall) },
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = tradingColors.cyanContainer,
-                        selectedLabelColor = tradingColors.cyan
+                        selectedContainerColor = tradingColors.bullishContainer,
+                        selectedLabelColor = tradingColors.bullish
                     ),
-                    modifier = Modifier.testTag("toggle_ema_chip")
+                    modifier = Modifier.testTag("subpanel_${ind.name.lowercase()}_chip")
                 )
-                FilterChip(
-                    selected = showBollinger,
-                    onClick = { showBollinger = !showBollinger },
-                    label = { Text("BB", style = MaterialTheme.typography.labelSmall) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = tradingColors.warningContainer,
-                        selectedLabelColor = tradingColors.warning
-                    ),
-                    modifier = Modifier.testTag("toggle_bb_chip")
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                SubPanelIndicator.entries.forEach { ind ->
-                    FilterChip(
-                        selected = subPanel == ind,
-                        onClick = { subPanel = ind },
-                        label = { Text(ind.label, style = MaterialTheme.typography.labelSmall) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = tradingColors.bullishContainer,
-                            selectedLabelColor = tradingColors.bullish
-                        ),
-                        modifier = Modifier.testTag("subpanel_${ind.name.lowercase()}_chip")
-                    )
-                }
             }
         }
 
@@ -168,6 +200,17 @@ fun CandlestickChartPanel(
                         minPrice = min(minPrice, bbLow.minOrNull() ?: minPrice)
                         maxPrice = max(maxPrice, bbUp.maxOrNull() ?: maxPrice)
                     }
+                    if (showVwap && snapshot != null && snapshot.vwapSeries.size == candles.size) {
+                        val vwapSlice = snapshot.vwapSeries.subList(startIndex, endIndex)
+                        minPrice = min(minPrice, vwapSlice.minOrNull() ?: minPrice)
+                        maxPrice = max(maxPrice, vwapSlice.maxOrNull() ?: maxPrice)
+                    }
+                    if (showSupportResistance && snapshot != null &&
+                        snapshot.supportLevel > 0.0 && snapshot.resistanceLevel > snapshot.supportLevel
+                    ) {
+                        minPrice = min(minPrice, snapshot.supportLevel)
+                        maxPrice = max(maxPrice, snapshot.resistanceLevel)
+                    }
 
                     val priceSpan = (maxPrice - minPrice).coerceAtLeast(1e-9)
                     val paddedMin = minPrice - priceSpan * 0.08
@@ -184,6 +227,28 @@ fun CandlestickChartPanel(
                     for (g in 1..3) {
                         val gy = h * (g / 4f)
                         drawLine(gridColor, Offset(0f, gy), Offset(w, gy), strokeWidth = 1f)
+                    }
+
+                    // Support & Resistance horizontal dashed guides
+                    if (showSupportResistance && snapshot != null &&
+                        snapshot.supportLevel > 0.0 && snapshot.resistanceLevel > snapshot.supportLevel
+                    ) {
+                        val supY = priceToY(snapshot.supportLevel)
+                        val resY = priceToY(snapshot.resistanceLevel)
+                        drawLine(
+                            color = tradingColors.bullish.copy(alpha = 0.65f),
+                            start = Offset(0f, supY),
+                            end = Offset(w, supY),
+                            strokeWidth = 1.4f,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
+                        )
+                        drawLine(
+                            color = tradingColors.bearish.copy(alpha = 0.65f),
+                            start = Offset(0f, resY),
+                            end = Offset(w, resY),
+                            strokeWidth = 1.4f,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
+                        )
                     }
 
                     val stepX = w / windowCandles.size.toFloat()
@@ -263,6 +328,22 @@ fun CandlestickChartPanel(
                         drawPath(slowPath, color = Color(0xFFA78BFA), style = Stroke(width = 2.4f))
                     }
 
+                    // VWAP overlay curve
+                    if (showVwap && snapshot != null && snapshot.vwapSeries.size == candles.size) {
+                        val vwapSlice = snapshot.vwapSeries.subList(startIndex, endIndex)
+                        val vwapPath = Path()
+                        vwapSlice.forEachIndexed { idx, v ->
+                            val x = idx * stepX + stepX / 2f
+                            val y = priceToY(v)
+                            if (idx == 0) vwapPath.moveTo(x, y) else vwapPath.lineTo(x, y)
+                        }
+                        drawPath(
+                            vwapPath,
+                            color = Color(0xFFF472B6).copy(alpha = if (snapshot.vwapReliable) 0.9f else 0.55f),
+                            style = Stroke(width = 2.0f)
+                        )
+                    }
+
                     // Current Price Dashed Line
                     val lastY = priceToY(lastClose)
                     drawLine(
@@ -293,7 +374,7 @@ fun CandlestickChartPanel(
                 }
             }
 
-            // Sub-panel Chart (RSI or MACD Histogram)
+            // Sub-panel Chart (RSI, MACD Histogram, or Stochastic %K/%D)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -361,12 +442,52 @@ fun CandlestickChartPanel(
                                 )
                             }
                         }
+
+                        SubPanelIndicator.STOCHASTIC -> {
+                            if (snapshot.stochKSeries.size != candles.size || snapshot.stochDSeries.size != candles.size) {
+                                return@Canvas
+                            }
+                            val kSlice = snapshot.stochKSeries.subList(startIndex, endIndex)
+                            val dSlice = snapshot.stochDSeries.subList(startIndex, endIndex)
+                            val y80 = h * (1f - 0.80f)
+                            val y20 = h * (1f - 0.20f)
+                            drawLine(
+                                color = tradingColors.bearish.copy(alpha = 0.35f),
+                                start = Offset(0f, y80),
+                                end = Offset(w, y80),
+                                strokeWidth = 1f,
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
+                            )
+                            drawLine(
+                                color = tradingColors.bullish.copy(alpha = 0.35f),
+                                start = Offset(0f, y20),
+                                end = Offset(w, y20),
+                                strokeWidth = 1f,
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
+                            )
+                            val stepX = w / kSlice.size.toFloat()
+                            val kPath = Path()
+                            val dPath = Path()
+                            kSlice.forEachIndexed { idx, kVal ->
+                                val x = idx * stepX + stepX / 2f
+                                val y = h * (1f - (kVal.toFloat() / 100f)).coerceIn(0f, 1f)
+                                if (idx == 0) kPath.moveTo(x, y) else kPath.lineTo(x, y)
+                            }
+                            dSlice.forEachIndexed { idx, dVal ->
+                                val x = idx * stepX + stepX / 2f
+                                val y = h * (1f - (dVal.toFloat() / 100f)).coerceIn(0f, 1f)
+                                if (idx == 0) dPath.moveTo(x, y) else dPath.lineTo(x, y)
+                            }
+                            drawPath(kPath, color = tradingColors.cyan, style = Stroke(width = 2.0f))
+                            drawPath(dPath, color = tradingColors.warning, style = Stroke(width = 1.8f))
+                        }
                     }
                 }
 
                 val indicatorText = when (subPanel) {
                     SubPanelIndicator.RSI -> "RSI: ${String.format("%.1f", snapshot?.rsi ?: 50.0)}"
                     SubPanelIndicator.MACD -> "MACD Hist: ${String.format("%.5f", snapshot?.macdHistogram ?: 0.0)}"
+                    SubPanelIndicator.STOCHASTIC -> "Stoch %K: ${String.format("%.1f", snapshot?.stochasticK ?: 50.0)} • %D: ${String.format("%.1f", snapshot?.stochasticD ?: 50.0)}"
                 }
                 Text(
                     text = indicatorText,

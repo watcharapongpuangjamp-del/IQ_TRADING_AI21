@@ -627,3 +627,27 @@ def test_phase8_performance_backtest_diagnostics_and_five_step_live_gate(client:
     assert len(readiness_res.json()["gates"]) == 5
 
 
+def test_phase10_broker_dry_run_endpoint_and_auth_isolation(
+    client: TestClient,
+    secured_client: TestClient,
+) -> None:
+    dry_res = client.post("/api/v1/trading/broker-dry-run", json={"instrument": "EUR/USD"})
+    assert dry_res.status_code == 200
+    body = dry_res.json()
+    assert body["connected"] is True
+    assert body["dry_run_passed"] is True
+    assert body["live_authorized"] is False
+    assert body["simulation_locked"] is True
+    assert body["market_price"] > 0
+    assert len(client.get("/api/v1/orders").json()) == 0
+
+    unauth_res = secured_client.post("/api/v1/trading/broker-dry-run", json={"instrument": "EUR/USD"})
+    assert unauth_res.status_code == 401
+
+    auth_res = secured_client.post(
+        "/api/v1/trading/broker-dry-run",
+        headers={"Authorization": "Bearer test-secret-token-12345"},
+        json={"instrument": "EUR/USD"},
+    )
+    assert auth_res.status_code == 200
+    assert auth_res.json()["simulation_locked"] is True

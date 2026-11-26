@@ -1,8 +1,8 @@
-import hmac
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import Settings, get_settings
+from app.engines.broker_dry_run import verify_bearer_credentials
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -11,24 +11,11 @@ def verify_bearer_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     settings: Settings = Depends(get_settings),
 ) -> None:
-    expected = settings.api_bearer_token.strip()
-    if not expected:
-        # Local development without configured API_BEARER_TOKEN
-        if settings.app_env == "production":
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="API_BEARER_TOKEN must be configured in production.",
-            )
-        return
-
-    if credentials is None or not credentials.credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Bearer authorization token.",
-        )
-
-    if not hmac.compare_digest(credentials.credentials.encode("utf-8"), expected.encode("utf-8")):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Bearer authorization token.",
-        )
+    presented = credentials.credentials if credentials is not None else None
+    ok, code, detail = verify_bearer_credentials(
+        presented_token=presented,
+        expected_token=settings.api_bearer_token,
+        app_env=settings.app_env,
+    )
+    if not ok:
+        raise HTTPException(status_code=code, detail=detail)

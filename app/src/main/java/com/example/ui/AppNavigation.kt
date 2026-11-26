@@ -176,6 +176,8 @@ private fun LocalTradingShell(
     val isBacktestBusy by viewModel.isBacktestBusy.collectAsStateWithLifecycle()
     val diagnosticsReport by viewModel.diagnosticsReport.collectAsStateWithLifecycle()
     val isDiagnosticsBusy by viewModel.isDiagnosticsBusy.collectAsStateWithLifecycle()
+    val brokerDryRunReport by viewModel.brokerDryRunReport.collectAsStateWithLifecycle()
+    val isDryRunBusy by viewModel.isDryRunBusy.collectAsStateWithLifecycle()
     val liveReadinessReport by viewModel.liveReadinessReport.collectAsStateWithLifecycle()
 
     LaunchedEffect(snackbarMessage) {
@@ -361,7 +363,8 @@ private fun LocalTradingShell(
                                 isReconciling = terminalState.isReconciling,
                                 onReconcileOrders = viewModel::reconcileBackendOrders,
                                 onSelectBackendOrder = viewModel::loadOrderLifecycleEvents,
-                                onClearOrderEvents = viewModel::clearSelectedOrderEvents
+                                onClearOrderEvents = viewModel::clearSelectedOrderEvents,
+                                onExportFeedback = viewModel::notifyMessage
                             )
                         }
                         composable(NavRoutes.SETTINGS_DOCS) {
@@ -375,6 +378,9 @@ private fun LocalTradingShell(
                                 diagnosticsReport = diagnosticsReport,
                                 isDiagnosticsBusy = isDiagnosticsBusy,
                                 onRunDiagnostics = viewModel::runSystemDiagnostics,
+                                dryRunReport = brokerDryRunReport,
+                                isDryRunBusy = isDryRunBusy,
+                                onRunBrokerDryRun = viewModel::runBrokerDryRun,
                                 onSwitchMode = viewModel::switchExecutionMode,
                                 onResetBalance = viewModel::resetSimulationBalance,
                                 onSaveIntegrations = viewModel::saveIntegrationsAndTestBackend,

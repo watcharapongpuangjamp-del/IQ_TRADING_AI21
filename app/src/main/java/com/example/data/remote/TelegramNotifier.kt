@@ -1,5 +1,6 @@
 package com.example.data.remote
 
+import com.example.security.SecretRedactor
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -61,13 +62,14 @@ class TelegramNotifier {
         if (botToken.isNullOrBlank() || chatId.isBlank()) {
             return Result.failure(IllegalStateException("กรุณาตั้งค่า Telegram Bot Token และ Chat ID ก่อน"))
         }
+        val cleanToken = botToken.trim()
         val safeTitle = escapeHtml(title)
         val safeBody = bodyLines.joinToString("\n") { escapeHtml(it) }
         val message = "<b>$safeTitle</b>\n$safeBody"
 
         return try {
             val response = api.sendMessage(
-                token = botToken.trim(),
+                token = cleanToken,
                 body = TelegramMessageRequest(
                     chat_id = chatId.trim(),
                     text = message
@@ -76,13 +78,17 @@ class TelegramNotifier {
             if (response.isSuccessful && response.body()?.ok == true) {
                 Result.success("ส่งแจ้งเตือนเข้า Telegram สำเร็จ")
             } else {
-                val errDesc = response.body()?.description ?: "HTTP ${response.code()}"
+                val errDesc = SecretRedactor.redact(
+                    response.body()?.description ?: "HTTP ${response.code()}",
+                    cleanToken
+                )
                 Result.failure(IllegalStateException("Telegram API ตอบกลับ: $errDesc"))
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Result.failure(IllegalStateException("เชื่อมต่อ Telegram ไม่สำเร็จ: ${e.localizedMessage}"))
+            val safeError = SecretRedactor.redact(e.localizedMessage, cleanToken).ifBlank { "Request error" }
+            Result.failure(IllegalStateException("เชื่อมต่อ Telegram ไม่สำเร็จ: $safeError"))
         }
     }
 

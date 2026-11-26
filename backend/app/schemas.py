@@ -670,3 +670,19 @@ class SystemDiagnosticsResponse(BaseModel):
     checked_at: datetime
 
 
+class BrokerDryRunRequest(BaseModel):
+    instrument: str = Field(default="EUR/USD", min_length=3, max_length=20)
+
+
+class BrokerDryRunResponse(BaseModel):
+    connector_name: str
+    connected: bool
+    dry_run_passed: bool
+    live_authorized: bool
+    simulation_locked: bool
+    latency_ms: float
+    market_price: float = 0.0
+    balance: float = 0.0
+    capabilities: List[str]
+    status_detail: str
+    checked_at: datetime

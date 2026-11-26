@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.config import Settings
 from app.connectors.base import BrokerConnector
 from app.domain import ExecutionMode, RiskPolicyConfig, TradeDirection, UNRESOLVED_LIFECYCLE_STATES
+from app.engines.broker_dry_run import run_broker_dry_run_probe
 from app.engines.market_intelligence import MarketIntelligenceEngine
 from app.engines.risk_engine import RiskManagementEngine
 from app.models import HistoricalCandleModel, ModelRegistryModel, OrderRecordModel, RiskPolicyModel
@@ -304,3 +305,15 @@ class SystemDiagnosticsEngine:
             "live_readiness": readiness,
             "checked_at": datetime.now(timezone.utc),
         }
+
+    @staticmethod
+    async def run_broker_dry_run(
+        connector: BrokerConnector,
+        settings: Settings,
+        instrument: str = "EUR/USD",
+    ) -> Dict[str, object]:
+        return await run_broker_dry_run_probe(
+            connector=connector,
+            allow_live_trading=settings.allow_live_trading,
+            instrument=instrument,
+        )

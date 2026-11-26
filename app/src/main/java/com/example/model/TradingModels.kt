@@ -210,6 +210,9 @@ data class TechnicalSnapshot(
     val bbLowerSeries: List<Double> = emptyList(),
     val rsiSeries: List<Double> = emptyList(),
     val macdHistSeries: List<Double> = emptyList(),
+    val vwapSeries: List<Double> = emptyList(),
+    val stochKSeries: List<Double> = emptyList(),
+    val stochDSeries: List<Double> = emptyList(),
     val adx: Double = 0.0,
     val plusDi: Double = 0.0,
     val minusDi: Double = 0.0,
@@ -614,3 +617,18 @@ data class SystemDiagnosticsReport(
     val liveReadiness: LiveReadinessReport = LiveReadinessReport(),
     val checkedAtMillis: Long = System.currentTimeMillis()
 )
+
+data class BrokerDryRunReport(
+    val connectorName: String = "Local Simulation Engine",
+    val connected: Boolean = false,
+    val dryRunPassed: Boolean = false,
+    val liveAuthorized: Boolean = false,
+    val simulationLocked: Boolean = true,
+    val latencyMs: Double = 0.0,
+    val marketPrice: Double = 0.0,
+    val balance: Double = 0.0,
+    val capabilities: List<String> = emptyList(),
+    val statusDetail: String = "",
+    val checkedAtMillis: Long = System.currentTimeMillis()
+)
+

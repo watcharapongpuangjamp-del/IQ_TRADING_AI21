@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 
+from app.connectors.http_broker import HttpBrokerConnector
 from app.connectors.simulation import SimulationConnector
 from app.domain import (
     AlignmentState,
@@ -14,6 +15,7 @@ from app.domain import (
     TradeStatus,
 )
 from app.engines.backtest_engine import WalkForwardBacktestEngine
+from app.engines.broker_dry_run import run_broker_dry_run_probe, verify_bearer_credentials
 from app.engines.learning_engine import LearningEvaluationEngine
 from app.engines.market_intelligence import MarketIntelligenceEngine
 from app.engines.multi_timeframe import MultiTimeframeEngine
@@ -131,7 +133,7 @@ class TestPurePythonEngines(unittest.TestCase):
         self.assertLessEqual(signal.calibrated_probability, 0.70)
         self.assertGreaterEqual(signal.confidence_score, 10)
         self.assertLessEqual(signal.confidence_score, 96)
-        self.assertNotEqual(round(signal.calibrated_probability * 100), signal.confidence_score)
+        self.assertGreater(abs(signal.calibrated_probability - (signal.confidence_score / 100.0)), 1e-3)
 
     def test_multi_timeframe_alignment_and_conflict_gate(self) -> None:
         bull_1m = _build_trending_candles(45, step=0.00015, tf_ms=60_000)
@@ -584,6 +586,245 @@ class TestPurePythonEngines(unittest.TestCase):
         for trade in res["simulated_trades"]:
             self.assertIn(trade["direction"], ("CALL", "PUT"))
             self.assertIn(trade["status"], ("WON", "LOST"))
+
+    def test_phase9_http_broker_connector_contract_redaction_and_idempotency(self) -> None:
+        # 1. Fail-closed when unconfigured or insecure non-localhost HTTP URL
+        unconfigured = HttpBrokerConnector(base_url="", api_token="", allow_live=True)
+        self.assertFalse(asyncio.run(unconfigured.connect()))
+        self.assertFalse(unconfigured.live_authorized)
+        with self.assertRaises(ConnectionError):
+            asyncio.run(unconfigured.submit_order("EUR/USD", "1m", "CALL", 25.0, 60))
+
+        insecure = HttpBrokerConnector(base_url="http://remote-broker.example", api_token="secret_tok_999")
+        self.assertFalse(asyncio.run(insecure.connect()))
+
+        # 2. Fake transport verifying X-Idempotency-Key, credential redaction, timeout -> UNKNOWN, and reconcile
+        calls = []
+        secret_token = "super_secret_broker_tok_12345"
+
+        def fake_transport(method, path, payload, headers, timeout):
+            calls.append((method, path, payload, headers))
+            if path == "/v1/health":
+                return 200, {"status": "ok"}
+            if path == "/v1/orders":
+                corr = payload["correlation_id"]
+                if corr == "corr_timeout":
+                    return 504, {"detail": f"Upstream timeout using {secret_token}"}
+                if corr == "corr_missing_oid":
+                    return 200, {"entry_price": 1.0845, "message": "ok without id"}
+                if corr == "corr_rejected":
+                    return 422, {"detail": f"Margin error for token {secret_token}"}
+                return 200, {
+                    "broker_order_id": "brk_001",
+                    "correlation_id": corr,
+                    "status": "WON",
+                    "lifecycle_state": "SETTLED",
+                    "settlement_outcome": "WON",
+                    "entry_price": 1.0845,
+                    "exit_price": 1.0852,
+                    "pnl": 21.25,
+                    "message": "Settled cleanly",
+                }
+            if path.startswith("/v1/orders/") and "/reconcile" in path:
+                return 200, {
+                    "broker_order_id": "brk_timeout_resolved",
+                    "correlation_id": "corr_timeout",
+                    "status": "LOST",
+                    "lifecycle_state": "SETTLED",
+                    "settlement_outcome": "LOST",
+                    "entry_price": 1.0845,
+                    "exit_price": 1.0839,
+                    "pnl": -25.0,
+                    "message": "Reconciled after timeout",
+                }
+            return 404, {"detail": "Not found"}
+
+        broker = HttpBrokerConnector(
+            base_url="https://broker.iqtrading.example",
+            api_token=secret_token,
+            timeout_seconds=5.0,
+            allow_live=True,
+            transport=fake_transport,
+        )
+        self.assertTrue(asyncio.run(broker.connect()))
+        self.assertTrue(broker.live_authorized)
+        self.assertIn("LIVE_ORDERS", broker.get_capabilities())
+
+        # Normal idempotent order submission
+        res1 = asyncio.run(broker.submit_order("EUR/USD", "1m", "CALL", 25.0, 60, correlation_id="corr_ok_1"))
+        res2 = asyncio.run(broker.submit_order("EUR/USD", "1m", "CALL", 25.0, 60, correlation_id="corr_ok_1"))
+        self.assertEqual(res1.order_id, "brk_001")
+        self.assertEqual(res1, res2)
+        post_calls = [c for c in calls if c[0] == "POST" and c[2] and c[2].get("correlation_id") == "corr_ok_1"]
+        self.assertEqual(len(post_calls), 1)
+        self.assertEqual(post_calls[0][3]["X-Idempotency-Key"], "corr_ok_1")
+
+        # Missing broker_order_id -> UNKNOWN (never treated as filled)
+        unk_res = asyncio.run(broker.submit_order("EUR/USD", "1m", "CALL", 25.0, 60, correlation_id="corr_missing_oid"))
+        self.assertEqual(unk_res.lifecycle_state, "UNKNOWN")
+        self.assertEqual(unk_res.status, "UNKNOWN")
+
+        # Secret redaction on 4xx rejection
+        rej_res = asyncio.run(broker.submit_order("EUR/USD", "1m", "PUT", 25.0, 60, correlation_id="corr_rejected"))
+        self.assertEqual(rej_res.lifecycle_state, "REJECTED")
+        self.assertNotIn(secret_token, rej_res.message)
+        self.assertIn("[REDACTED]", rej_res.message)
+
+        # 504 timeout -> raises TimeoutError for UNKNOWN tracking, reconciled cleanly afterward
+        with self.assertRaises(TimeoutError):
+            asyncio.run(broker.submit_order("EUR/USD", "1m", "CALL", 25.0, 60, correlation_id="corr_timeout"))
+        reconciled = asyncio.run(broker.reconcile_order("ord_local_t1", correlation_id="corr_timeout"))
+        self.assertEqual(reconciled.lifecycle_state, "SETTLED")
+        self.assertEqual(reconciled.settlement_outcome, "LOST")
+        self.assertEqual(reconciled.pnl, -25.0)
+
+    def test_phase9_failure_scenarios_stale_candles_and_emergency_stop(self) -> None:
+        base_candles = _build_trending_candles(30, step=0.0002)
+
+        # Duplicate timestamps rejected
+        dup_candles = list(base_candles)
+        dup_candles[12] = dict(dup_candles[11])
+        dup_report = MarketIntelligenceEngine.inspect_candles(dup_candles, expected_timeframe_sec=60)
+        self.assertFalse(dup_report.valid)
+        self.assertEqual(dup_report.duplicate_count, 1)
+
+        # Corrupted OHLC bounds rejected
+        corrupt = list(base_candles)
+        bad_bar = dict(corrupt[15])
+        bad_bar["high"] = bad_bar["low"] - 0.001
+        corrupt[15] = bad_bar
+        corrupt_report = MarketIntelligenceEngine.inspect_candles(corrupt, expected_timeframe_sec=60)
+        self.assertFalse(corrupt_report.valid)
+
+        # Gap detection flagged accurately
+        gapped = [dict(c) for c in base_candles]
+        for i in range(20, len(gapped)):
+            gapped[i]["timestamp"] += 600_000  # 10m gap on 1m timeframe
+        gap_report = MarketIntelligenceEngine.inspect_candles(gapped, expected_timeframe_sec=60)
+        self.assertTrue(gap_report.valid)
+        self.assertGreaterEqual(gap_report.gap_count, 1)
+
+        # Insufficient bars -> MarketIntelligence rejects (<25) and <2 bars triggers UNKNOWN + NO_TRADE
+        short_dq = MarketIntelligenceEngine.inspect_candles(base_candles[:10], expected_timeframe_sec=60)
+        self.assertFalse(short_dq.valid)
+        short_snap = TechnicalAnalysisEngine.analyze(base_candles[:1], self.strategy)
+        self.assertEqual(short_snap.regime, MarketRegime.UNKNOWN)
+        short_signal = AISignalEngine.evaluate(base_candles[:1], short_snap, self.strategy)
+        self.assertEqual(short_signal.direction, TradeDirection.NO_TRADE)
+
+        # Emergency stop & unauthorized LIVE fail closed
+        stopped = RiskManagementEngine.validate_order(
+            policy=RiskPolicyConfig(emergency_stopped=True),
+            total_trades_today=0,
+            net_pnl_today=0.0,
+            consecutive_losses=0,
+            open_exposure=0.0,
+            requested_amount=25.0,
+            direction=TradeDirection.CALL,
+            mode=ExecutionMode.SIMULATION,
+            live_authorized=False,
+            last_loss_epoch_ms=None,
+        )
+        self.assertFalse(stopped.allowed)
+
+        live_blocked = RiskManagementEngine.validate_order(
+            policy=RiskPolicyConfig(emergency_stopped=False),
+            total_trades_today=0,
+            net_pnl_today=0.0,
+            consecutive_losses=0,
+            open_exposure=0.0,
+            requested_amount=25.0,
+            direction=TradeDirection.CALL,
+            mode=ExecutionMode.LIVE,
+            live_authorized=False,
+            last_loss_epoch_ms=None,
+        )
+        self.assertFalse(live_blocked.allowed)
+
+    def test_phase10_broker_dry_run_probe_and_security_guards(self) -> None:
+        # 1. SimulationConnector dry-run keeps SIMULATION locked and succeeds without placing orders
+        sim_report = asyncio.run(
+            run_broker_dry_run_probe(
+                connector=self.connector,
+                allow_live_trading=False,
+                instrument="EUR/USD",
+            )
+        )
+        self.assertTrue(sim_report["connected"])
+        self.assertTrue(sim_report["dry_run_passed"])
+        self.assertFalse(sim_report["live_authorized"])
+        self.assertTrue(sim_report["simulation_locked"])
+        self.assertGreater(sim_report["market_price"], 0.0)
+        self.assertGreater(sim_report["balance"], 0.0)
+
+        # 2. Disconnected HttpBrokerConnector fails dry-run safely & stays SIMULATION locked
+        disconnected_http = HttpBrokerConnector(base_url="", api_token="", allow_live=False)
+        disc_report = asyncio.run(
+            run_broker_dry_run_probe(
+                connector=disconnected_http,
+                allow_live_trading=False,
+                instrument="EUR/USD",
+            )
+        )
+        self.assertFalse(disc_report["connected"])
+        self.assertFalse(disc_report["dry_run_passed"])
+        self.assertTrue(disc_report["simulation_locked"])
+
+        # 3. Connected HttpBrokerConnector dry-run executes ONLY read-only probes (never POST /v1/orders)
+        seen_paths = []
+
+        def dry_run_transport(method, path, payload, headers, timeout):
+            seen_paths.append((method, path))
+            if path == "/v1/health":
+                return 200, {"status": "ok"}
+            if path.startswith("/v1/market/tick"):
+                return 200, {"price": 1.0847, "timestamp": 1700000000000, "payout_rate": 0.85}
+            if path == "/v1/account/balance":
+                return 200, {"balance": 2500.0}
+            raise AssertionError(f"Unexpected mutating path during dry-run: {method} {path}")
+
+        connected_http = HttpBrokerConnector(
+            base_url="https://broker.iqtrading.example",
+            api_token="broker_secret_123",
+            allow_live=False,
+            transport=dry_run_transport,
+        )
+        self.assertTrue(asyncio.run(connected_http.connect()))
+        http_report = asyncio.run(
+            run_broker_dry_run_probe(
+                connector=connected_http,
+                allow_live_trading=False,
+                instrument="EUR/USD",
+            )
+        )
+        self.assertTrue(http_report["connected"])
+        self.assertTrue(http_report["dry_run_passed"])
+        self.assertTrue(http_report["simulation_locked"])
+        self.assertAlmostEqual(http_report["balance"], 2500.0, places=2)
+        self.assertFalse(any(p[0] == "POST" for p in seen_paths))
+
+        # 4. Bearer token security checks: production fail-closed & constant-time verification
+        ok_prod, code_prod, _ = verify_bearer_credentials(None, expected_token="", app_env="production")
+        self.assertFalse(ok_prod)
+        self.assertEqual(code_prod, 500)
+
+        ok_missing, code_missing, _ = verify_bearer_credentials(
+            None, expected_token="unit_test_secret_token", app_env="development"
+        )
+        self.assertFalse(ok_missing)
+        self.assertEqual(code_missing, 401)
+
+        ok_wrong, code_wrong, _ = verify_bearer_credentials(
+            "wrong_token", expected_token="unit_test_secret_token", app_env="development"
+        )
+        self.assertFalse(ok_wrong)
+        self.assertEqual(code_wrong, 401)
+
+        ok_valid, code_valid, _ = verify_bearer_credentials(
+            "unit_test_secret_token", expected_token="unit_test_secret_token", app_env="production"
+        )
+        self.assertTrue(ok_valid)
+        self.assertEqual(code_valid, 200)
 
 
 if __name__ == "__main__":

@@ -790,6 +790,231 @@ class TradingEnginesUnitTest {
         assertEquals(ExecutionMode.SIMULATION, parsedDiag?.liveReadiness?.currentMode)
         assertEquals(1, parsedDiag?.liveReadiness?.gates?.size)
     }
+
+    @Test
+    fun phase9_technicalSnapshot_computesAlignedVwapAndStochasticSeries() {
+        val sim = MarketSimulationEngine()
+        val candles = sim.generateInitialCandles("EUR/USD", 60, 75)
+        val snapshot = TechnicalAnalysisEngine.analyze(candles, StrategyConfig(instrument = "EUR/USD"))
+
+        assertEquals(candles.size, snapshot.vwapSeries.size)
+        assertEquals(candles.size, snapshot.stochKSeries.size)
+        assertEquals(candles.size, snapshot.stochDSeries.size)
+        assertTrue(snapshot.stochKSeries.all { it in 0.0..100.0 })
+        assertTrue(snapshot.stochDSeries.all { it in 0.0..100.0 })
+        assertEquals(snapshot.vwap, snapshot.vwapSeries.last(), 1e-6)
+        assertEquals(snapshot.stochasticK, snapshot.stochKSeries.last(), 1e-6)
+        assertEquals(snapshot.stochasticD, snapshot.stochDSeries.last(), 1e-6)
+    }
+
+    @Test
+    fun phase9_tradeJournalExporter_filtersAndEscapesCsvAndJsonSafely() {
+        val trades = listOf(
+            com.example.model.TradeRecord(
+                id = "t1",
+                instrument = "EUR/USD",
+                timeframe = "1m",
+                direction = "CALL",
+                mode = "SIMULATION",
+                status = "WON",
+                amount = 25.0,
+                payoutRate = 0.85,
+                entryPrice = 1.0845,
+                exitPrice = 1.0852,
+                pnl = 21.25,
+                strategyName = "Breakout, \"Fast\"",
+                marketRegime = "BREAKOUT",
+                confidenceScore = 78,
+                calibratedProbability = 0.642,
+                explanation = "RSI + VWAP\nconfirmed",
+                createdAtMillis = 1700000000000L
+            ),
+            com.example.model.TradeRecord(
+                id = "t2",
+                instrument = "GBP/USD",
+                timeframe = "5m",
+                direction = "PUT",
+                mode = "SIMULATION",
+                status = "LOST",
+                amount = 30.0,
+                payoutRate = 0.84,
+                entryPrice = 1.2680,
+                exitPrice = 1.2690,
+                pnl = -30.0,
+                strategyName = "RSI Reversal",
+                marketRegime = "SIDEWAYS",
+                confidenceScore = 66,
+                calibratedProbability = 0.560,
+                explanation = "Mean reversion",
+                createdAtMillis = 1700000300000L
+            ),
+            com.example.model.TradeRecord(
+                id = "t3",
+                instrument = "USD/JPY",
+                timeframe = "1m",
+                direction = "CALL",
+                mode = "LIVE",
+                status = "OPEN",
+                amount = 10.0,
+                payoutRate = 0.83,
+                entryPrice = 153.40,
+                exitPrice = 0.0,
+                pnl = 0.0,
+                strategyName = "EMA Trend",
+                marketRegime = "STRONG_TREND",
+                confidenceScore = 72,
+                calibratedProbability = 0.610,
+                explanation = "Pending expiry",
+                createdAtMillis = 1700000600000L
+            )
+        )
+
+        assertEquals(3, com.example.engine.TradeJournalExporter.filterTrades(trades, "", "ALL").size)
+        assertEquals(listOf("t1"), com.example.engine.TradeJournalExporter.filterTrades(trades, "", "WON").map { it.id })
+        assertEquals(listOf("t2"), com.example.engine.TradeJournalExporter.filterTrades(trades, "", "LOST").map { it.id })
+        assertEquals(listOf("t3"), com.example.engine.TradeJournalExporter.filterTrades(trades, "", "OPEN").map { it.id })
+        assertEquals(listOf("t1"), com.example.engine.TradeJournalExporter.filterTrades(trades, "breakout", "ALL").map { it.id })
+
+        val csv = com.example.engine.TradeJournalExporter.toCsv(listOf(trades.first()))
+        assertTrue(csv.startsWith("id,instrument,timeframe,direction,mode,status,"))
+        assertTrue(csv.contains("\"Breakout, \"\"Fast\"\"\""))
+        assertTrue(csv.contains("BREAKOUT"))
+        assertTrue(csv.contains("\"RSI + VWAP\nconfirmed\""))
+
+        val json = com.example.engine.TradeJournalExporter.toJson(trades, exportedAtMillis = 1700001000000L)
+        assertTrue(json.contains("\"record_count\": 3"))
+        assertTrue(json.contains("\"market_regime\": \"BREAKOUT\""))
+        assertTrue(json.contains("Breakout, \\\"Fast\\\""))
+        assertTrue(json.contains("RSI + VWAP\\nconfirmed"))
+    }
+
+    @Test
+    fun phase9_failureResilience_missingCandles_cooldown_unknownOrder_andRestartRecovery() = kotlinx.coroutines.test.runTest {
+        val sim = MarketSimulationEngine()
+        val validCandles = sim.generateInitialCandles("EUR/USD", 60, 40)
+
+        // Missing candles / short feed rejected
+        val shortDq = com.example.engine.MultiTimeframeLocalEngine.inspectDataQuality(validCandles.take(12))
+        assertFalse(shortDq.valid)
+
+        // Duplicate timestamp rejected
+        val dupCandles = validCandles.toMutableList()
+        dupCandles[10] = dupCandles[9]
+        val dupDq = com.example.engine.MultiTimeframeLocalEngine.inspectDataQuality(dupCandles)
+        assertFalse(dupDq.valid)
+        assertEquals(1, dupDq.duplicateCount)
+
+        // Gap flagged
+        val gapped = validCandles.mapIndexed { idx, c ->
+            if (idx >= 20) c.copy(timestampMillis = c.timestampMillis + 600_000L) else c
+        }
+        val gapDq = com.example.engine.MultiTimeframeLocalEngine.inspectDataQuality(gapped)
+        assertTrue(gapDq.gapCount >= 1)
+
+        // Risk Management fail-closed scenarios: Cooldown + Emergency Stop + Unauthorized LIVE
+        val now = 1_700_000_600_000L
+        val cooldownBlocked = RiskManagementEngine.validateOrder(
+            policy = RiskPolicy(cooldownMinutes = 15, emergencyStopped = false),
+            todaySummary = DailyPnLSummary(totalTrades = 2, wins = 1, losses = 1, netPnl = -5.0, consecutiveLosses = 1),
+            openExposure = 0.0,
+            requestedAmount = 25.0,
+            direction = TradeDirection.CALL,
+            mode = ExecutionMode.SIMULATION,
+            backendReadyForLive = false,
+            lastLossTimestampMillis = now - 60_000L,
+            nowMillis = now
+        )
+        assertFalse(cooldownBlocked.allowed)
+
+        // Backend UNKNOWN order requires reconciliation
+        val client = com.example.data.remote.BackendConnectorClient()
+        val unknownDto = client.parseOrderSubmitResponseJson(
+            """{"order_id":"ord_99","status":"UNKNOWN","entry_price":1.0845,"lifecycle_state":"UNKNOWN","requires_reconciliation":true,"correlation_id":"corr_99"}"""
+        )
+        assertEquals(com.example.model.OrderLifecycleState.UNKNOWN, unknownDto?.toDomain()?.lifecycleState)
+        assertTrue(unknownDto?.toDomain()?.requiresReconciliation == true)
+
+        // Simulated app restart preserves unresolved OPEN trade in Room DAO until reconciled/settled
+        val dao = InMemoryTradingDao()
+        val repoBeforeRestart = com.example.data.repository.LocalTradingRepository(dao)
+        repoBeforeRestart.ensureUserBootstrap("local_trader")
+        val tradeId = repoBeforeRestart.createTrade(
+            com.example.model.TradeRecord(
+                id = "restart_open_1",
+                userId = "local_trader",
+                instrument = "EUR/USD",
+                timeframe = "1m",
+                direction = "CALL",
+                mode = "SIMULATION",
+                amount = 25.0,
+                entryPrice = 1.0845,
+                status = "OPEN"
+            )
+        ).getOrThrow()
+
+        val repoAfterRestart = com.example.data.repository.LocalTradingRepository(dao)
+        assertEquals("OPEN", dao.trades[tradeId]?.status)
+        assertTrue(repoAfterRestart.settleTrade(tradeId, 1.0854, com.example.model.TradeStatus.WON, 21.25).isSuccess)
+        assertEquals("WON", dao.trades[tradeId]?.status)
+        assertEquals(21.25, dao.trades[tradeId]?.pnl ?: 0.0, 1e-6)
+    }
+
+    @Test
+    fun phase10_secretRedactor_and_tlsTransportGuard_preventTokenLeakage() {
+        val rawTelegramErr = "POST https://api.telegram.org/bot987654321:AAFakeSecretToken_XYZ987/sendMessage failed; Authorization: Bearer my_secret_jwt_123"
+        val redacted = com.example.security.SecretRedactor.redact(
+            rawTelegramErr,
+            "987654321:AAFakeSecretToken_XYZ987",
+            "my_secret_jwt_123"
+        )
+        assertFalse(redacted.contains("AAFakeSecretToken_XYZ987"))
+        assertFalse(redacted.contains("my_secret_jwt_123"))
+        assertTrue(redacted.contains("[REDACTED]"))
+
+        val client = com.example.data.remote.BackendConnectorClient()
+        // HTTPS/WSS allowed for remote hosts with Bearer token
+        assertTrue(client.isSafeTokenTransport("https://api.iqtrading.example", hasToken = true))
+        assertTrue(client.isSafeTokenTransport("wss://api.iqtrading.example/ws/market", hasToken = true))
+        // Loopback HTTP/WS allowed for local/emulator development
+        assertTrue(client.isSafeTokenTransport("http://10.0.2.2:8000", hasToken = true))
+        assertTrue(client.isSafeTokenTransport("ws://127.0.0.1:8000/ws/system", hasToken = true))
+        // Remote cleartext HTTP/WS strictly blocked when Bearer token is present
+        assertFalse(client.isSafeTokenTransport("http://vps.iqtrading.example:8000", hasToken = true))
+        assertFalse(client.isSafeTokenTransport("ws://vps.iqtrading.example:8000/ws/market", hasToken = true))
+        // Unauthenticated local URL without token stays valid
+        assertTrue(client.isSafeTokenTransport("http://vps.iqtrading.example:8000", hasToken = false))
+    }
+
+    @Test
+    fun phase10_brokerDryRunDto_parsing_and_simulationLockDefault() {
+        val client = com.example.data.remote.BackendConnectorClient()
+        val dryRunJson = """
+            {
+              "connector_name": "http_broker",
+              "connected": true,
+              "dry_run_passed": true,
+              "live_authorized": false,
+              "simulation_locked": true,
+              "latency_ms": 14.25,
+              "market_price": 1.08465,
+              "balance": 5000.0,
+              "capabilities": ["MARKET_DATA", "CANDLES", "DEMO_ORDERS"],
+              "status_detail": "Non-executing probe passed; SIMULATION lock active.",
+              "checked_at": "2026-11-26T18:00:00Z"
+            }
+        """.trimIndent()
+        val report = client.parseBrokerDryRunJson(dryRunJson)?.toDomain()
+        assertNotNull(report)
+        assertEquals("http_broker", report?.connectorName)
+        assertTrue(report?.connected == true)
+        assertTrue(report?.dryRunPassed == true)
+        assertFalse(report?.liveAuthorized == true)
+        assertTrue(report?.simulationLocked == true)
+        assertEquals(14.25, report?.latencyMs ?: 0.0, 1e-6)
+        assertEquals(1.08465, report?.marketPrice ?: 0.0, 1e-6)
+        assertEquals(5000.0, report?.balance ?: 0.0, 1e-6)
+        assertEquals(listOf("MARKET_DATA", "CANDLES", "DEMO_ORDERS"), report?.capabilities)
+    }
 }
 
 private class InMemoryTradingDao : com.example.data.local.TradingDao {

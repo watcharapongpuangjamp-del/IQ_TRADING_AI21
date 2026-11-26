@@ -53,6 +53,7 @@ object TechnicalAnalysisEngine {
         val (adx, plusDi, minusDi) = calculateAdx(candles, period = 14)
         val (stochK, stochD) = calculateStochastic(candles, kPeriod = 14, dPeriod = 3)
         val (vwap, vwapReliable) = calculateVwap(candles, window = 60)
+        val vwapSeries = calculateVwapSeries(candles, window = 60)
 
         val lastClose = closes.last()
         val emaFastLast = emaFastSeries.lastOrNull() ?: lastClose
@@ -113,6 +114,9 @@ object TechnicalAnalysisEngine {
             bbLowerSeries = bbTuple.third,
             rsiSeries = rsiSeries,
             macdHistSeries = macdTuple.third,
+            vwapSeries = vwapSeries,
+            stochKSeries = stochK,
+            stochDSeries = stochD,
             adx = adx,
             plusDi = plusDi,
             minusDi = minusDi,
@@ -335,6 +339,32 @@ object TechnicalAnalysisEngine {
         }
         val reliable = totalVol > 0.0 && (positiveBars.toDouble() / recent.size) >= 0.25
         return if (reliable) (totalPv / totalVol) to true else typicalPrices.average() to false
+    }
+
+    fun calculateVwapSeries(candles: List<Candle>, window: Int = 60): List<Double> {
+        if (candles.isEmpty()) return emptyList()
+        val w = window.coerceAtLeast(1)
+        val out = ArrayList<Double>(candles.size)
+        for (i in candles.indices) {
+            val start = max(0, i - w + 1)
+            val slice = candles.subList(start, i + 1)
+            var positiveBars = 0
+            var totalPv = 0.0
+            var totalVol = 0.0
+            var tpSum = 0.0
+            for (c in slice) {
+                val tp = (c.high + c.low + c.close) / 3.0
+                tpSum += tp
+                if (c.volume > 0.0) {
+                    positiveBars++
+                    totalPv += tp * c.volume
+                    totalVol += c.volume
+                }
+            }
+            val reliable = totalVol > 0.0 && (positiveBars.toDouble() / slice.size) >= 0.25
+            out.add(if (reliable) totalPv / totalVol else tpSum / slice.size)
+        }
+        return out
     }
 
     fun detectCandlestickPattern(candles: List<Candle>): String {

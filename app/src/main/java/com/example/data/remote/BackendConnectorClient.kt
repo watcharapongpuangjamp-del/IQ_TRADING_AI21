@@ -3,6 +3,7 @@ package com.example.data.remote
 import com.example.model.BackendHealthState
 import com.example.model.BackendOrderSummary
 import com.example.model.BacktestReport
+import com.example.model.BrokerDryRunReport
 import com.example.model.Candle
 import com.example.model.ExecutionMode
 import com.example.model.LiveReadinessReport
@@ -15,6 +16,7 @@ import com.example.model.RiskPolicy
 import com.example.model.StrategyConfig
 import com.example.model.StrategySelectionReport
 import com.example.model.SystemDiagnosticsReport
+import com.example.security.SecretRedactor
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CancellationException
@@ -33,6 +35,7 @@ import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
+import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
@@ -220,6 +223,12 @@ interface FastApiTradingApi {
         @Query("instrument") instrument: String = "EUR/USD",
         @Query("timeframe") timeframe: String = "1m"
     ): Response<SystemDiagnosticsResponseDto>
+
+    @POST("api/v1/trading/broker-dry-run")
+    suspend fun runBrokerDryRun(
+        @Header("Authorization") authHeader: String?,
+        @Body payload: BrokerDryRunRequestDto
+    ): Response<BrokerDryRunResponseDto>
 }
 
 class BackendConnectorClient {
@@ -237,6 +246,7 @@ class BackendConnectorClient {
     private val performanceAdapter = moshi.adapter(TradingPerformanceResponseDto::class.java)
     private val backtestAdapter = moshi.adapter(BacktestRunResponseDto::class.java)
     private val diagnosticsAdapter = moshi.adapter(SystemDiagnosticsResponseDto::class.java)
+    private val dryRunAdapter = moshi.adapter(BrokerDryRunResponseDto::class.java)
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
@@ -257,6 +267,31 @@ class BackendConnectorClient {
         val trimmed = url.trim()
         return trimmed.startsWith("wss://", ignoreCase = true) ||
             trimmed.startsWith("ws://", ignoreCase = true)
+    }
+
+    fun isLoopbackHost(url: String): Boolean {
+        val host = try {
+            URI(url.trim()).host?.lowercase().orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+        return host == "localhost" || host == "127.0.0.1" || host == "10.0.2.2" || host == "::1" || host == "[::1]"
+    }
+
+    /**
+     * Prevents accidental cleartext transmission of Bearer tokens over remote http:// or ws://.
+     * Localhost / emulator loopback (10.0.2.2) remains permitted for local development.
+     */
+    fun isSafeTokenTransport(url: String, hasToken: Boolean): Boolean {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return false
+        if (trimmed.startsWith("https://", ignoreCase = true) || trimmed.startsWith("wss://", ignoreCase = true)) {
+            return true
+        }
+        if (!hasToken) {
+            return isValidHttpUrl(trimmed) || isValidWsUrl(trimmed)
+        }
+        return (isValidHttpUrl(trimmed) || isValidWsUrl(trimmed)) && isLoopbackHost(trimmed)
     }
 
     fun resolveWebSocketUrl(
@@ -387,8 +422,18 @@ class BackendConnectorClient {
         return minOf(30_000L, 1_000L * (1L shl shift))
     }
 
-    private fun buildAuthHeader(bearerToken: String?): String? =
-        bearerToken?.trim()?.takeIf { it.isNotBlank() }?.let { "Bearer $it" }
+    private fun buildAuthHeader(baseUrl: String, bearerToken: String?): String? {
+        val trimmed = bearerToken?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        requireSafeTokenTransport(baseUrl, trimmed)
+        return "Bearer $trimmed"
+    }
+
+    private fun requireSafeTokenTransport(baseUrl: String, bearerToken: String?) {
+        val hasToken = !bearerToken.isNullOrBlank()
+        if (!isSafeTokenTransport(baseUrl, hasToken)) {
+            throw IllegalStateException("Blocked cleartext Bearer token over remote HTTP/WS URL (use https:// or wss://).")
+        }
+    }
 
     private fun buildApi(baseUrl: String): FastApiTradingApi {
         val normalized = if (baseUrl.trim().endsWith("/")) baseUrl.trim() else "${baseUrl.trim()}/"
@@ -410,8 +455,17 @@ class BackendConnectorClient {
                 statusMessage = "ยังไม่ได้กำหนด FastAPI URL (ทำงานในโหมด Simulation อิสระ)"
             )
         }
+        val hasToken = !bearerToken.isNullOrBlank()
+        if (!isSafeTokenTransport(baseUrl, hasToken)) {
+            return BackendHealthState(
+                connected = false,
+                connectorName = "TLS Guard Blocked",
+                liveAuthorized = false,
+                statusMessage = "ไม่อนุญาตส่ง Bearer Token ผ่าน http:// ไปยังโฮสต์ภายนอก — กรุณาเปลี่ยนเป็น https://"
+            )
+        }
         return try {
-            val response = buildApi(baseUrl).getHealth(buildAuthHeader(bearerToken))
+            val response = buildApi(baseUrl).getHealth(buildAuthHeader(baseUrl, bearerToken))
             if (response.isSuccessful && response.body() != null) {
                 val body = response.body()!!
                 BackendHealthState(
@@ -432,11 +486,12 @@ class BackendConnectorClient {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            val safeError = SecretRedactor.redact(e.localizedMessage, bearerToken).ifBlank { "Connection failed" }
             BackendHealthState(
                 connected = false,
                 connectorName = "Offline Fallback",
                 liveAuthorized = false,
-                statusMessage = "ไม่สามารถติดต่อ FastAPI: ${e.localizedMessage ?: "Connection failed"}"
+                statusMessage = "ไม่สามารถติดต่อ FastAPI: $safeError"
             )
         }
     }
@@ -448,7 +503,7 @@ class BackendConnectorClient {
         timeframe: String,
         limit: Int = 80
     ): Result<List<Candle>> = safeCall {
-        val response = buildApi(baseUrl).getCandles(buildAuthHeader(bearerToken), instrument, timeframe, limit)
+        val response = buildApi(baseUrl).getCandles(buildAuthHeader(baseUrl, bearerToken), instrument, timeframe, limit)
         if (response.isSuccessful && response.body() != null) {
             response.body()!!.map { it.toDomain() }
         } else {
@@ -463,7 +518,7 @@ class BackendConnectorClient {
         timeframe: String,
         limit: Int = 120
     ): Result<List<Candle>> = safeCall {
-        val response = buildApi(baseUrl).getCandleHistory(buildAuthHeader(bearerToken), instrument, timeframe, limit)
+        val response = buildApi(baseUrl).getCandleHistory(buildAuthHeader(baseUrl, bearerToken), instrument, timeframe, limit)
         if (response.isSuccessful && response.body() != null) {
             response.body()!!.map { it.toDomain() }
         } else {
@@ -476,7 +531,7 @@ class BackendConnectorClient {
         bearerToken: String?,
         instrument: String
     ): Result<MarketIntelligenceResponseDto> = safeCall {
-        val response = buildApi(baseUrl).getMarketIntelligence(buildAuthHeader(bearerToken), instrument)
+        val response = buildApi(baseUrl).getMarketIntelligence(buildAuthHeader(baseUrl, bearerToken), instrument)
         if (response.isSuccessful && response.body() != null) {
             response.body()!!
         } else {
@@ -492,7 +547,7 @@ class BackendConnectorClient {
         initialWindow: Int = 180
     ): Result<ReplayEvaluationResponseDto> = safeCall {
         val response = buildApi(baseUrl).startReplay(
-            buildAuthHeader(bearerToken),
+            buildAuthHeader(baseUrl, bearerToken),
             ReplayStartRequestDto(instrument = instrument, total_bars = totalBars, initial_window = initialWindow)
         )
         if (response.isSuccessful && response.body() != null) {
@@ -508,7 +563,7 @@ class BackendConnectorClient {
         steps: Int = 1
     ): Result<ReplayEvaluationResponseDto> = safeCall {
         val response = buildApi(baseUrl).stepReplay(
-            buildAuthHeader(bearerToken),
+            buildAuthHeader(baseUrl, bearerToken),
             ReplayStepRequestDto(steps = steps)
         )
         if (response.isSuccessful && response.body() != null) {
@@ -522,7 +577,7 @@ class BackendConnectorClient {
         baseUrl: String,
         bearerToken: String?
     ): Result<ReplayEvaluationResponseDto> = safeCall {
-        val response = buildApi(baseUrl).resetReplay(buildAuthHeader(bearerToken))
+        val response = buildApi(baseUrl).resetReplay(buildAuthHeader(baseUrl, bearerToken))
         if (response.isSuccessful && response.body() != null) {
             response.body()!!
         } else {
@@ -534,7 +589,7 @@ class BackendConnectorClient {
         baseUrl: String,
         bearerToken: String?
     ): Result<TradingStateDto> = safeCall {
-        val response = buildApi(baseUrl).getTradingState(buildAuthHeader(bearerToken))
+        val response = buildApi(baseUrl).getTradingState(buildAuthHeader(baseUrl, bearerToken))
         if (response.isSuccessful && response.body() != null) {
             response.body()!!
         } else {
@@ -548,7 +603,7 @@ class BackendConnectorClient {
         strategy: StrategyConfig
     ): Result<StrategyParametersDto> = safeCall {
         val response = buildApi(baseUrl).updateStrategy(
-            buildAuthHeader(bearerToken),
+            buildAuthHeader(baseUrl, bearerToken),
             StrategyParametersDto.fromDomain(strategy)
         )
         if (response.isSuccessful && response.body() != null) {
@@ -564,7 +619,7 @@ class BackendConnectorClient {
         policy: RiskPolicy
     ): Result<RiskPolicyDto> = safeCall {
         val response = buildApi(baseUrl).updateRiskPolicy(
-            buildAuthHeader(bearerToken),
+            buildAuthHeader(baseUrl, bearerToken),
             RiskPolicyDto.fromDomain(policy)
         )
         if (response.isSuccessful && response.body() != null) {
@@ -580,7 +635,7 @@ class BackendConnectorClient {
         stopped: Boolean
     ): Result<RiskPolicyDto> = safeCall {
         val api = buildApi(baseUrl)
-        val auth = buildAuthHeader(bearerToken)
+        val auth = buildAuthHeader(baseUrl, bearerToken)
         val response = if (stopped) api.triggerEmergencyStop(auth) else api.resetEmergencyStop(auth)
         if (response.isSuccessful && response.body() != null) {
             response.body()!!
@@ -596,7 +651,7 @@ class BackendConnectorClient {
         explicitLiveConfirmation: Boolean = false
     ): Result<HealthResponseDto> = safeCall {
         val response = buildApi(baseUrl).switchMode(
-            buildAuthHeader(bearerToken),
+            buildAuthHeader(baseUrl, bearerToken),
             ModeSwitchRequestDto(
                 mode = mode.name,
                 explicit_live_confirmation = explicitLiveConfirmation
@@ -614,13 +669,13 @@ class BackendConnectorClient {
         bearerToken: String?,
         request: OrderSubmitRequestDto
     ): Result<OrderSubmitResponseDto> = safeCall {
-        val response = buildApi(baseUrl).submitOrder(buildAuthHeader(bearerToken), request)
+        val response = buildApi(baseUrl).submitOrder(buildAuthHeader(baseUrl, bearerToken), request)
         if (response.isSuccessful && response.body() != null) {
             response.body()!!
         } else {
-            val detail = response.errorBody()?.string()?.take(240)
+            val detail = SecretRedactor.redact(response.errorBody()?.string()?.take(240), bearerToken)
             throw IllegalStateException(
-                if (!detail.isNullOrBlank()) "Order rejected HTTP ${response.code()}: $detail"
+                if (detail.isNotBlank()) "Order rejected HTTP ${response.code()}: $detail"
                 else "Order rejected HTTP ${response.code()}"
             )
         }
@@ -631,7 +686,7 @@ class BackendConnectorClient {
         bearerToken: String?,
         limit: Int = 50
     ): Result<List<BackendOrderSummary>> = safeCall {
-        val response = buildApi(baseUrl).listOrders(buildAuthHeader(bearerToken), limit)
+        val response = buildApi(baseUrl).listOrders(buildAuthHeader(baseUrl, bearerToken), limit)
         if (response.isSuccessful && response.body() != null) {
             response.body()!!.map { it.toDomain() }
         } else {
@@ -644,7 +699,7 @@ class BackendConnectorClient {
         bearerToken: String?,
         orderId: String
     ): Result<List<OrderLifecycleEvent>> = safeCall {
-        val response = buildApi(baseUrl).getOrderLifecycleEvents(buildAuthHeader(bearerToken), orderId)
+        val response = buildApi(baseUrl).getOrderLifecycleEvents(buildAuthHeader(baseUrl, bearerToken), orderId)
         if (response.isSuccessful && response.body() != null) {
             response.body()!!.map { it.toDomain() }
         } else {
@@ -658,7 +713,7 @@ class BackendConnectorClient {
         orderId: String? = null
     ): Result<ReconcileSummary> = safeCall {
         val api = buildApi(baseUrl)
-        val auth = buildAuthHeader(bearerToken)
+        val auth = buildAuthHeader(baseUrl, bearerToken)
         val response = if (orderId.isNullOrBlank()) {
             api.reconcileAllOrders(auth)
         } else {
@@ -676,7 +731,7 @@ class BackendConnectorClient {
         bearerToken: String?,
         instrument: String? = null
     ): Result<List<MlModelSummary>> = safeCall {
-        val auth = buildAuthHeader(bearerToken)
+        val auth = buildAuthHeader(baseUrl, bearerToken)
         val api = buildApi(baseUrl)
         val activeId = if (!instrument.isNullOrBlank()) {
             val activeRes = api.getActiveMlModel(auth, instrument, "1m")
@@ -697,7 +752,7 @@ class BackendConnectorClient {
         algorithm: String = "logistic_regression"
     ): Result<MlModelSummary> = safeCall {
         val response = buildApi(baseUrl).trainMlModel(
-            buildAuthHeader(bearerToken),
+            buildAuthHeader(baseUrl, bearerToken),
             TrainModelRequestDto(
                 instrument = instrument,
                 timeframe = "1m",
@@ -718,7 +773,7 @@ class BackendConnectorClient {
         modelId: String
     ): Result<MlModelSummary> = safeCall {
         val response = buildApi(baseUrl).promoteMlModel(
-            buildAuthHeader(bearerToken),
+            buildAuthHeader(baseUrl, bearerToken),
             modelId,
             PromoteModelRequestDto(owner_confirmed = true)
         )
@@ -734,7 +789,7 @@ class BackendConnectorClient {
         bearerToken: String?,
         modelId: String
     ): Result<MlDriftReport> = safeCall {
-        val response = buildApi(baseUrl).checkModelDrift(buildAuthHeader(bearerToken), modelId)
+        val response = buildApi(baseUrl).checkModelDrift(buildAuthHeader(baseUrl, bearerToken), modelId)
         if (response.isSuccessful && response.body() != null) {
             response.body()!!.toDomain()
         } else {
@@ -749,16 +804,16 @@ class BackendConnectorClient {
         reason: String? = null
     ): Result<MlModelSummary> = safeCall {
         val response = buildApi(baseUrl).rollbackMlModel(
-            buildAuthHeader(bearerToken),
+            buildAuthHeader(baseUrl, bearerToken),
             targetModelId,
             RollbackModelRequestDto(owner_confirmed = true, reason = reason)
         )
         if (response.isSuccessful && response.body() != null) {
             response.body()!!.toDomain(activeModelId = targetModelId)
         } else {
-            val detail = response.errorBody()?.string()?.take(200)
+            val detail = SecretRedactor.redact(response.errorBody()?.string()?.take(200), bearerToken)
             throw IllegalStateException(
-                if (!detail.isNullOrBlank()) "ML rollback HTTP ${response.code()}: $detail"
+                if (detail.isNotBlank()) "ML rollback HTTP ${response.code()}: $detail"
                 else "ML rollback HTTP ${response.code()}"
             )
         }
@@ -771,7 +826,7 @@ class BackendConnectorClient {
         timeframe: String,
         userId: String = ""
     ): Result<StrategySelectionReport> = safeCall {
-        val response = buildApi(baseUrl).listStrategies(buildAuthHeader(bearerToken), instrument, timeframe)
+        val response = buildApi(baseUrl).listStrategies(buildAuthHeader(baseUrl, bearerToken), instrument, timeframe)
         if (response.isSuccessful && response.body() != null) {
             response.body()!!.toDomain(userId)
         } else {
@@ -789,7 +844,7 @@ class BackendConnectorClient {
         userId: String = ""
     ): Result<StrategySelectionReport> = safeCall {
         val response = buildApi(baseUrl).selectStrategy(
-            buildAuthHeader(bearerToken),
+            buildAuthHeader(baseUrl, bearerToken),
             SelectStrategyRequestDto(
                 strategy_id = strategyId,
                 auto_select = autoSelect,
@@ -822,12 +877,18 @@ class BackendConnectorClient {
         null
     }
 
+    fun parseBrokerDryRunJson(rawJson: String): BrokerDryRunResponseDto? = try {
+        dryRunAdapter.fromJson(rawJson)
+    } catch (_: Exception) {
+        null
+    }
+
     suspend fun fetchTradingPerformance(
         baseUrl: String,
         bearerToken: String?,
         mode: String = "SIMULATION"
     ): Result<PerformanceAnalyticsReport> = safeCall {
-        val response = buildApi(baseUrl).getTradingPerformance(buildAuthHeader(bearerToken), mode)
+        val response = buildApi(baseUrl).getTradingPerformance(buildAuthHeader(baseUrl, bearerToken), mode)
         if (response.isSuccessful && response.body() != null) {
             response.body()!!.toDomain()
         } else {
@@ -845,7 +906,7 @@ class BackendConnectorClient {
         lookbackBars: Int = 180
     ): Result<BacktestReport> = safeCall {
         val response = buildApi(baseUrl).runBacktest(
-            buildAuthHeader(bearerToken),
+            buildAuthHeader(baseUrl, bearerToken),
             BacktestRunRequestDto(
                 instrument = instrument,
                 timeframe = timeframe,
@@ -865,7 +926,7 @@ class BackendConnectorClient {
         baseUrl: String,
         bearerToken: String?
     ): Result<LiveReadinessReport> = safeCall {
-        val response = buildApi(baseUrl).getLiveReadiness(buildAuthHeader(bearerToken))
+        val response = buildApi(baseUrl).getLiveReadiness(buildAuthHeader(baseUrl, bearerToken))
         if (response.isSuccessful && response.body() != null) {
             response.body()!!.toDomain()
         } else {
@@ -879,11 +940,27 @@ class BackendConnectorClient {
         instrument: String = "EUR/USD",
         timeframe: String = "1m"
     ): Result<SystemDiagnosticsReport> = safeCall {
-        val response = buildApi(baseUrl).getSystemDiagnostics(buildAuthHeader(bearerToken), instrument, timeframe)
+        val response = buildApi(baseUrl).getSystemDiagnostics(buildAuthHeader(baseUrl, bearerToken), instrument, timeframe)
         if (response.isSuccessful && response.body() != null) {
             response.body()!!.toDomain()
         } else {
             throw IllegalStateException("Diagnostics HTTP ${response.code()}")
+        }
+    }
+
+    suspend fun runBrokerDryRun(
+        baseUrl: String,
+        bearerToken: String?,
+        instrument: String = "EUR/USD"
+    ): Result<BrokerDryRunReport> = safeCall {
+        val response = buildApi(baseUrl).runBrokerDryRun(
+            buildAuthHeader(baseUrl, bearerToken),
+            BrokerDryRunRequestDto(instrument = instrument)
+        )
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!.toDomain()
+        } else {
+            throw IllegalStateException("Broker dry-run HTTP ${response.code()}")
         }
     }
 
@@ -906,6 +983,10 @@ class BackendConnectorClient {
     ) {
         disconnectTickStream()
         if (!isValidWsUrl(wsUrl)) return
+        if (!isSafeTokenTransport(wsUrl, !bearerToken.isNullOrBlank())) {
+            onFailure("Blocked cleartext WebSocket Bearer token (use wss:// for remote hosts)")
+            return
+        }
         val reqBuilder = Request.Builder().url(wsUrl.trim())
         if (!bearerToken.isNullOrBlank()) {
             reqBuilder.addHeader("Authorization", "Bearer ${bearerToken.trim()}")
@@ -920,12 +1001,12 @@ class BackendConnectorClient {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: OkResponse?) {
-                onFailure(t.localizedMessage ?: "WebSocket connection lost")
+                onFailure(SecretRedactor.redact(t.localizedMessage, bearerToken).ifBlank { "WebSocket connection lost" })
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (code != 1000) {
-                    onFailure(reason.ifBlank { "WebSocket closed ($code)" })
+                    onFailure(SecretRedactor.redact(reason, bearerToken).ifBlank { "WebSocket closed ($code)" })
                 }
             }
         })
@@ -941,6 +1022,10 @@ class BackendConnectorClient {
         signalWebSocket?.close(1000, "Switching stream")
         signalWebSocket = null
         if (!isValidWsUrl(wsUrl)) return
+        if (!isSafeTokenTransport(wsUrl, !bearerToken.isNullOrBlank())) {
+            onFailure("Blocked cleartext Signal WS Bearer token (use wss://)")
+            return
+        }
         val reqBuilder = Request.Builder().url(wsUrl.trim())
         if (!bearerToken.isNullOrBlank()) {
             reqBuilder.addHeader("Authorization", "Bearer ${bearerToken.trim()}")
@@ -955,12 +1040,12 @@ class BackendConnectorClient {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: OkResponse?) {
-                onFailure(t.localizedMessage ?: "Signal WebSocket lost")
+                onFailure(SecretRedactor.redact(t.localizedMessage, bearerToken).ifBlank { "Signal WebSocket lost" })
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (code != 1000) {
-                    onFailure(reason.ifBlank { "Signal WS closed ($code)" })
+                    onFailure(SecretRedactor.redact(reason, bearerToken).ifBlank { "Signal WS closed ($code)" })
                 }
             }
         })
@@ -976,6 +1061,10 @@ class BackendConnectorClient {
         systemWebSocket?.close(1000, "Switching stream")
         systemWebSocket = null
         if (!isValidWsUrl(wsUrl)) return
+        if (!isSafeTokenTransport(wsUrl, !bearerToken.isNullOrBlank())) {
+            onFailure("Blocked cleartext System WS Bearer token (use wss://)")
+            return
+        }
         val reqBuilder = Request.Builder().url(wsUrl.trim())
         if (!bearerToken.isNullOrBlank()) {
             reqBuilder.addHeader("Authorization", "Bearer ${bearerToken.trim()}")
@@ -990,12 +1079,12 @@ class BackendConnectorClient {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: OkResponse?) {
-                onFailure(t.localizedMessage ?: "System WebSocket lost")
+                onFailure(SecretRedactor.redact(t.localizedMessage, bearerToken).ifBlank { "System WebSocket lost" })
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (code != 1000) {
-                    onFailure(reason.ifBlank { "System WS closed ($code)" })
+                    onFailure(SecretRedactor.redact(reason, bearerToken).ifBlank { "System WS closed ($code)" })
                 }
             }
         })

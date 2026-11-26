@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     api_bearer_token: str = ""
     allowed_origins: str = ""
     model_artifacts_dir: str = "artifacts/models"
+    broker_adapter: str = "simulation"
+    broker_base_url: str = ""
+    broker_api_token: str = ""
+    broker_timeout_seconds: float = 10.0
 
 
 @lru_cache
