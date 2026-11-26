@@ -57,40 +57,8 @@ data class LocalTradeCacheEntity(
     val confidenceScore: Int,
     val calibratedProbability: Double,
     val explanation: String,
-    val createdAtMillis: Long,
-    val syncedToCloud: Boolean
+    val createdAtMillis: Long
 )
-
-@Entity(
-    tableName = "sync_queue",
-    indices = [Index(value = ["userId", "status", "nextRetryMillis"])]
-)
-data class SyncQueueEntity(
-    @PrimaryKey val queueId: String,
-    val userId: String,
-    val entityType: String,
-    val documentId: String,
-    val payloadJson: String,
-    val clientModifiedMillis: Long,
-    val retryCount: Int = 0,
-    val nextRetryMillis: Long = 0L,
-    val lastError: String? = null,
-    val status: String = SyncQueueStatus.PENDING
-)
-
-object SyncQueueStatus {
-    const val PENDING = "PENDING"
-    const val SYNCED = "SYNCED"
-    const val FAILED_PERMANENT = "FAILED_PERMANENT"
-}
-
-object SyncEntityType {
-    const val TRADE_CREATE = "TRADE_CREATE"
-    const val TRADE_SETTLE = "TRADE_SETTLE"
-    const val DAILY_SUMMARY = "DAILY_SUMMARY"
-    const val STRATEGY = "STRATEGY"
-    const val RISK_POLICY = "RISK_POLICY"
-}
 
 @Dao
 interface TradingDao {
@@ -114,9 +82,6 @@ interface TradingDao {
 
     @Query("UPDATE local_trade_logs SET exitPrice = :exitPrice, status = :status, pnl = :pnl WHERE tradeId = :tradeId")
     suspend fun settleLocalTrade(tradeId: String, exitPrice: Double, status: String, pnl: Double)
-
-    @Query("UPDATE local_trade_logs SET syncedToCloud = 1 WHERE tradeId = :tradeId")
-    suspend fun markSynced(tradeId: String)
 
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -144,46 +109,12 @@ interface TradingDao {
     @Query("SELECT * FROM local_daily_pnl_summaries WHERE dateKey = :dateKey LIMIT 1")
     suspend fun getDailySummary(dateKey: String): LocalDailySummaryEntity?
 
-    @Query("SELECT COUNT(*) FROM sync_queue WHERE userId = :userId AND status = 'PENDING'")
-    fun observePendingSyncCount(userId: String): Flow<Int>
 
-    @Query("SELECT COUNT(*) FROM sync_queue WHERE userId = :userId AND status = 'FAILED_PERMANENT'")
-    fun observeFailedSyncCount(userId: String): Flow<Int>
-
-    @Query(
-        "SELECT * FROM sync_queue WHERE userId = :userId AND status = 'PENDING' AND nextRetryMillis <= :nowMillis " +
-            "ORDER BY clientModifiedMillis ASC LIMIT :limit"
-    )
-    suspend fun getDueSyncItems(userId: String, nowMillis: Long, limit: Int = 20): List<SyncQueueEntity>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertSyncItem(item: SyncQueueEntity)
-
-    @Query("UPDATE sync_queue SET status = 'SYNCED', lastError = NULL WHERE queueId = :queueId")
-    suspend fun markSyncItemDone(queueId: String)
-
-    @Query(
-        "UPDATE sync_queue SET retryCount = :retryCount, nextRetryMillis = :nextRetryMillis, " +
-            "lastError = :lastError, status = :status WHERE queueId = :queueId"
-    )
-    suspend fun markSyncItemRetry(
-        queueId: String,
-        retryCount: Int,
-        nextRetryMillis: Long,
-        lastError: String,
-        status: String
-    )
-
-    @Query("UPDATE sync_queue SET status = 'PENDING', retryCount = 0, nextRetryMillis = 0 WHERE userId = :userId AND status = 'FAILED_PERMANENT'")
-    suspend fun resetFailedSyncItems(userId: String)
-
-    @Query("DELETE FROM sync_queue WHERE status = 'SYNCED' AND clientModifiedMillis < :olderThanMillis")
-    suspend fun pruneSyncedItems(olderThanMillis: Long)
 }
 
 @Database(
-    entities = [CachedCandleEntity::class, LocalTradeCacheEntity::class, SyncQueueEntity::class, LocalStrategyEntity::class, LocalRiskPolicyEntity::class, LocalUserProfileEntity::class, LocalDailySummaryEntity::class],
-    version = 3,
+    entities = [CachedCandleEntity::class, LocalTradeCacheEntity::class, LocalStrategyEntity::class, LocalRiskPolicyEntity::class, LocalUserProfileEntity::class, LocalDailySummaryEntity::class],
+    version = 4,
     exportSchema = false
 )
 abstract class TradingDatabase : RoomDatabase() {
@@ -227,6 +158,16 @@ abstract class TradingDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE local_trade_logs_new (tradeId TEXT NOT NULL PRIMARY KEY, userId TEXT NOT NULL, instrument TEXT NOT NULL, timeframe TEXT NOT NULL, direction TEXT NOT NULL, mode TEXT NOT NULL, amount REAL NOT NULL, payoutRate REAL NOT NULL, entryPrice REAL NOT NULL, exitPrice REAL NOT NULL, status TEXT NOT NULL, pnl REAL NOT NULL, strategyName TEXT NOT NULL, confidenceScore INTEGER NOT NULL, calibratedProbability REAL NOT NULL, explanation TEXT NOT NULL, createdAtMillis INTEGER NOT NULL)")
+                db.execSQL("INSERT INTO local_trade_logs_new (tradeId,userId,instrument,timeframe,direction,mode,amount,payoutRate,entryPrice,exitPrice,status,pnl,strategyName,confidenceScore,calibratedProbability,explanation,createdAtMillis) SELECT tradeId,userId,instrument,timeframe,direction,mode,amount,payoutRate,entryPrice,exitPrice,status,pnl,strategyName,confidenceScore,calibratedProbability,explanation,createdAtMillis FROM local_trade_logs")
+                db.execSQL("DROP TABLE local_trade_logs")
+                db.execSQL("ALTER TABLE local_trade_logs_new RENAME TO local_trade_logs")
+                db.execSQL("DROP TABLE IF EXISTS sync_queue")
+            }
+        }
+
         @Volatile
         private var INSTANCE: TradingDatabase? = null
 
@@ -237,7 +178,7 @@ abstract class TradingDatabase : RoomDatabase() {
                     TradingDatabase::class.java,
                     "iq_trading_local_cache.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { INSTANCE = it }
             }
