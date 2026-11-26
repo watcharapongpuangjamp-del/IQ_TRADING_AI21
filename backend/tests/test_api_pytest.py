@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from app.config import Settings
 from app.database import Base, get_db
 from app.main import create_app, seed_initial_records
+from app.models import RiskPolicyModel
 
 
 @pytest.fixture()
@@ -36,8 +37,18 @@ def client(tmp_path: Path):
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
+    app.state.test_session_local = TestingSessionLocal
     with TestClient(app) as test_client:
         yield test_client
+
+
+def _disable_test_cooldown(client: TestClient) -> None:
+    # These tests isolate reconciliation behavior; loss-cooldown is tested separately.
+    with client.app.state.test_session_local() as db:
+        policy = db.get(RiskPolicyModel, 1)
+        assert policy is not None
+        policy.cooldown_minutes = 0
+        db.commit()
 
 
 @pytest.fixture()
@@ -325,6 +336,7 @@ def test_order_lifecycle_10_states_audit_events(client: TestClient) -> None:
 
 
 def test_unknown_timeout_never_resubmits_and_blocks_new_orders_until_reconciled(client: TestClient) -> None:
+    _disable_test_cooldown(client)
     connector = client.app.state.connector
     connector.queue_simulation_behavior("TIMEOUT", persistent_unknown=True)
 
@@ -397,6 +409,7 @@ def test_unknown_timeout_never_resubmits_and_blocks_new_orders_until_reconciled(
 
 
 def test_pending_order_auto_reconciles_before_new_trade_without_double_counting(client: TestClient) -> None:
+    _disable_test_cooldown(client)
     connector = client.app.state.connector
     connector.queue_simulation_behavior("PENDING")
 
