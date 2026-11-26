@@ -123,6 +123,8 @@ interface TradingDao {
     suspend fun upsertStrategy(strategy: LocalStrategyEntity)
     @Query("SELECT * FROM local_strategy_configs WHERE userId = :userId ORDER BY updatedAtMillis DESC")
     fun observeStrategies(userId: String): Flow<List<LocalStrategyEntity>>
+    @Query("SELECT * FROM local_strategy_configs WHERE id = :id LIMIT 1")
+    suspend fun getStrategy(id: String): LocalStrategyEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRiskPolicy(policy: LocalRiskPolicyEntity)
     @Query("SELECT * FROM local_risk_policies WHERE id = 'default' LIMIT 1")
