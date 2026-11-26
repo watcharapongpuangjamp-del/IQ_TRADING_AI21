@@ -15,6 +15,31 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
+@Entity(tableName = "legacy_local_queue_archive", indices = [Index(value = ["userId", "status", "nextRetryMillis"])])
+data class LegacyLocalQueueArchiveEntity(
+    @PrimaryKey val queueId: String,
+    val userId: String,
+    val entityType: String,
+    val documentId: String,
+    val payloadJson: String,
+    val clientModifiedMillis: Long,
+    val retryCount: Int,
+    val nextRetryMillis: Long,
+    val lastError: String?,
+    val status: String
+)
+
+@Entity(tableName = "local_strategy_configs", indices = [Index(value = ["userId"])])
+data class LocalStrategyEntity(@PrimaryKey val id: String, val userId: String, val name: String, val instrument: String, val timeframe: String, val tradeAmount: Double, val expirySeconds: Int, val rsiPeriod: Int, val rsiOversold: Int, val rsiOverbought: Int, val emaFast: Int, val emaSlow: Int, val macdFast: Int, val macdSlow: Int, val macdSignal: Int, val bbPeriod: Int, val bbStdDev: Double, val minConfidence: Int, val active: Boolean, val updatedAtMillis: Long)
+
+@Entity(tableName = "local_risk_policies")
+data class LocalRiskPolicyEntity(@PrimaryKey val id: String = "default", val userId: String, val maxTradeAmount: Double, val maxDailyLoss: Double, val maxConsecutiveLosses: Int, val maxDailyTrades: Int, val maxPortfolioExposure: Double, val cooldownMinutes: Int, val emergencyStopped: Boolean, val autoTradeEnabled: Boolean, val updatedAtMillis: Long)
+
+@Entity(tableName = "local_user_profile")
+data class LocalUserProfileEntity(@PrimaryKey val id: String = "local", val userId: String = "local", val displayName: String = "Trader", val executionMode: String = "SIMULATION", val simulationBalance: Double = 10000.0, val updatedAtMillis: Long = 0L)
+
+@Entity(tableName = "local_daily_pnl_summaries")
+data class LocalDailySummaryEntity(@PrimaryKey val dateKey: String, val userId: String, val totalTrades: Int, val wins: Int, val losses: Int, val netPnl: Double, val consecutiveLosses: Int, val peakDrawdown: Double, val updatedAtMillis: Long)
 @Entity(tableName = "cached_candles")
 data class CachedCandleEntity(
     @PrimaryKey(autoGenerate = true) val localId: Long = 0,
@@ -43,95 +68,16 @@ data class LocalTradeCacheEntity(
     val status: String,
     val pnl: Double,
     val strategyName: String,
-    val marketRegime: String = "UNKNOWN",
     val confidenceScore: Int,
     val calibratedProbability: Double,
     val explanation: String,
-    val createdAtMillis: Long,
-    val syncedToCloud: Boolean = true
-)
-
-@Entity(tableName = "local_user_profiles")
-data class LocalUserProfileEntity(
-    @PrimaryKey val userId: String,
-    val displayName: String,
-    val email: String? = null,
-    val executionMode: String,
-    val simulationBalance: Double,
-    val lastSavedAtMillis: Long? = null,
-    val createdAtMillis: Long,
-    val updatedAtMillis: Long
-)
-
-@Entity(
-    tableName = "local_strategies",
-    indices = [Index(value = ["userId", "active"])]
-)
-data class LocalStrategyConfigEntity(
-    @PrimaryKey val id: String,
-    val userId: String,
-    val name: String,
-    val instrument: String,
-    val timeframe: String,
-    val tradeAmount: Double,
-    val expirySeconds: Int,
-    val rsiPeriod: Int,
-    val rsiOversold: Int,
-    val rsiOverbought: Int,
-    val emaFast: Int,
-    val emaSlow: Int,
-    val macdFast: Int,
-    val macdSlow: Int,
-    val macdSignal: Int,
-    val bbPeriod: Int,
-    val bbStdDev: Double,
-    val minConfidence: Int,
-    val active: Boolean,
-    val createdAtMillis: Long,
-    val updatedAtMillis: Long
-)
-
-@Entity(tableName = "local_risk_policies")
-data class LocalRiskPolicyEntity(
-    @PrimaryKey val userId: String,
-    val maxTradeAmount: Double,
-    val maxDailyLoss: Double,
-    val maxConsecutiveLosses: Int,
-    val maxDailyTrades: Int,
-    val maxPortfolioExposure: Double,
-    val cooldownMinutes: Int,
-    val emergencyStopped: Boolean,
-    val autoTradeEnabled: Boolean,
-    val createdAtMillis: Long,
-    val updatedAtMillis: Long
-)
-
-@Entity(
-    tableName = "local_daily_summaries",
-    indices = [Index(value = ["userId", "dateKey"], unique = true)]
-)
-data class LocalDailySummaryEntity(
-    @PrimaryKey val summaryId: String,
-    val userId: String,
-    val dateKey: String,
-    val totalTrades: Int,
-    val wins: Int,
-    val losses: Int,
-    val netPnl: Double,
-    val consecutiveLosses: Int,
-    val peakDrawdown: Double,
-    val createdAtMillis: Long,
-    val updatedAtMillis: Long
+    val createdAtMillis: Long
 )
 
 @Dao
 interface TradingDao {
-    // --- Candles ---
     @Query("SELECT * FROM cached_candles WHERE instrument = :instrument AND timeframe = :timeframe ORDER BY timestampMillis ASC LIMIT 120")
     fun observeCandles(instrument: String, timeframe: String): Flow<List<CachedCandleEntity>>
-
-    @Query("SELECT COUNT(*) FROM cached_candles")
-    fun observeCandleCount(): Flow<Int>
 
     @Query("DELETE FROM cached_candles WHERE instrument = :instrument AND timeframe = :timeframe")
     suspend fun clearCandles(instrument: String, timeframe: String)
@@ -139,77 +85,49 @@ interface TradingDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCandles(candles: List<CachedCandleEntity>)
 
-    // --- User Profile ---
-    @Query("SELECT * FROM local_user_profiles WHERE userId = :userId LIMIT 1")
-    fun observeUserProfile(userId: String): Flow<LocalUserProfileEntity?>
-
-    @Query("SELECT * FROM local_user_profiles WHERE userId = :userId LIMIT 1")
-    suspend fun getUserProfileOnce(userId: String): LocalUserProfileEntity?
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertUserProfile(profile: LocalUserProfileEntity)
-
-    // --- Strategies ---
-    @Query("SELECT * FROM local_strategies WHERE userId = :userId ORDER BY updatedAtMillis DESC")
-    fun observeStrategies(userId: String): Flow<List<LocalStrategyConfigEntity>>
-
-    @Query("SELECT * FROM local_strategies WHERE userId = :userId ORDER BY updatedAtMillis DESC")
-    suspend fun getStrategiesOnce(userId: String): List<LocalStrategyConfigEntity>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertStrategy(strategy: LocalStrategyConfigEntity)
-
-    // --- Risk Policies ---
-    @Query("SELECT * FROM local_risk_policies WHERE userId = :userId LIMIT 1")
-    fun observeRiskPolicy(userId: String): Flow<LocalRiskPolicyEntity?>
-
-    @Query("SELECT * FROM local_risk_policies WHERE userId = :userId LIMIT 1")
-    suspend fun getRiskPolicyOnce(userId: String): LocalRiskPolicyEntity?
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertRiskPolicy(policy: LocalRiskPolicyEntity)
-
-    // --- Trade Journal ---
-    @Query("SELECT * FROM local_trade_logs WHERE userId = :userId ORDER BY createdAtMillis DESC LIMIT 500")
+    @Query("SELECT * FROM local_trade_logs WHERE userId = :userId ORDER BY createdAtMillis DESC LIMIT 100")
     fun observeLocalTrades(userId: String): Flow<List<LocalTradeCacheEntity>>
-
-    @Query("SELECT COUNT(*) FROM local_trade_logs WHERE userId = :userId")
-    fun observeTradeCount(userId: String): Flow<Int>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertTrade(trade: LocalTradeCacheEntity)
 
-    @Query(
-        "UPDATE local_trade_logs SET exitPrice = :exitPrice, status = :status, pnl = :pnl " +
-            "WHERE tradeId = :tradeId"
-    )
-    suspend fun updateTradeSettlement(
-        tradeId: String,
-        exitPrice: Double,
-        status: String,
-        pnl: Double
-    )
+    @Query("SELECT * FROM local_trade_logs WHERE userId = :userId ORDER BY createdAtMillis DESC")
+    fun observeAllLocalTrades(userId: String): Flow<List<LocalTradeCacheEntity>>
 
-    // --- Daily P&L Summaries ---
-    @Query("SELECT * FROM local_daily_summaries WHERE userId = :userId ORDER BY dateKey DESC LIMIT 60")
-    fun observeDailySummaries(userId: String): Flow<List<LocalDailySummaryEntity>>
+    @Query("UPDATE local_trade_logs SET exitPrice = :exitPrice, status = :status, pnl = :pnl WHERE tradeId = :tradeId")
+    suspend fun settleLocalTrade(tradeId: String, exitPrice: Double, status: String, pnl: Double)
 
-    @Query("SELECT * FROM local_daily_summaries WHERE summaryId = :summaryId LIMIT 1")
-    suspend fun getDailySummaryOnce(summaryId: String): LocalDailySummaryEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertStrategy(strategy: LocalStrategyEntity)
+    @Query("SELECT * FROM local_strategy_configs WHERE userId = :userId ORDER BY updatedAtMillis DESC")
+    fun observeStrategies(userId: String): Flow<List<LocalStrategyEntity>>
+    @Query("SELECT * FROM local_strategy_configs WHERE id = :id LIMIT 1")
+    suspend fun getStrategy(id: String): LocalStrategyEntity?
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertRiskPolicy(policy: LocalRiskPolicyEntity)
+    @Query("SELECT * FROM local_risk_policies WHERE id = 'default' LIMIT 1")
+    fun observeRiskPolicy(): Flow<LocalRiskPolicyEntity?>
+    @Query("SELECT * FROM local_risk_policies WHERE id = 'default' LIMIT 1")
+    suspend fun getRiskPolicy(): LocalRiskPolicyEntity?
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertUserProfile(profile: LocalUserProfileEntity)
+    @Query("SELECT * FROM local_user_profile WHERE id = 'local' LIMIT 1")
+    fun observeUserProfile(): Flow<LocalUserProfileEntity?>
+    @Query("SELECT * FROM local_user_profile WHERE id = 'local' LIMIT 1")
+    suspend fun getUserProfile(): LocalUserProfileEntity?
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertDailySummary(summary: LocalDailySummaryEntity)
+    @Query("SELECT * FROM local_daily_pnl_summaries WHERE userId = :userId ORDER BY dateKey DESC LIMIT 30")
+    fun observeDailySummaries(userId: String): Flow<List<LocalDailySummaryEntity>>
+    @Query("SELECT * FROM local_daily_pnl_summaries WHERE dateKey = :dateKey LIMIT 1")
+    suspend fun getDailySummary(dateKey: String): LocalDailySummaryEntity?
+
+
 }
 
 @Database(
-    entities = [
-        CachedCandleEntity::class,
-        LocalTradeCacheEntity::class,
-        LocalUserProfileEntity::class,
-        LocalStrategyConfigEntity::class,
-        LocalRiskPolicyEntity::class,
-        LocalDailySummaryEntity::class
-    ],
+    entities = [CachedCandleEntity::class, LocalTradeCacheEntity::class, LocalStrategyEntity::class, LocalRiskPolicyEntity::class, LocalUserProfileEntity::class, LocalDailySummaryEntity::class, LegacyLocalQueueArchiveEntity::class],
     version = 4,
     exportSchema = false
 )
@@ -217,8 +135,6 @@ abstract class TradingDatabase : RoomDatabase() {
     abstract fun tradingDao(): TradingDao
 
     companion object {
-        const val DATABASE_NAME = "iq_trading_local_cache.db"
-
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -238,111 +154,34 @@ abstract class TradingDatabase : RoomDatabase() {
                     )
                     """.trimIndent()
                 )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_sync_queue_userId_status_nextRetryMillis` " +
+                        "ON `sync_queue` (`userId`, `status`, `nextRetryMillis`)"
+                )
             }
         }
 
         val MIGRATION_2_3: Migration = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("DROP TABLE IF EXISTS `sync_queue`")
-
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `local_user_profiles` (
-                        `userId` TEXT NOT NULL,
-                        `displayName` TEXT NOT NULL,
-                        `email` TEXT,
-                        `executionMode` TEXT NOT NULL,
-                        `simulationBalance` REAL NOT NULL,
-                        `lastSavedAtMillis` INTEGER,
-                        `createdAtMillis` INTEGER NOT NULL,
-                        `updatedAtMillis` INTEGER NOT NULL,
-                        PRIMARY KEY(`userId`)
-                    )
-                    """.trimIndent()
-                )
-
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `local_strategies` (
-                        `id` TEXT NOT NULL,
-                        `userId` TEXT NOT NULL,
-                        `name` TEXT NOT NULL,
-                        `instrument` TEXT NOT NULL,
-                        `timeframe` TEXT NOT NULL,
-                        `tradeAmount` REAL NOT NULL,
-                        `expirySeconds` INTEGER NOT NULL,
-                        `rsiPeriod` INTEGER NOT NULL,
-                        `rsiOversold` INTEGER NOT NULL,
-                        `rsiOverbought` INTEGER NOT NULL,
-                        `emaFast` INTEGER NOT NULL,
-                        `emaSlow` INTEGER NOT NULL,
-                        `macdFast` INTEGER NOT NULL,
-                        `macdSlow` INTEGER NOT NULL,
-                        `macdSignal` INTEGER NOT NULL,
-                        `bbPeriod` INTEGER NOT NULL,
-                        `bbStdDev` REAL NOT NULL,
-                        `minConfidence` INTEGER NOT NULL,
-                        `active` INTEGER NOT NULL,
-                        `createdAtMillis` INTEGER NOT NULL,
-                        `updatedAtMillis` INTEGER NOT NULL,
-                        PRIMARY KEY(`id`)
-                    )
-                    """.trimIndent()
-                )
-                db.execSQL(
-                    "CREATE INDEX IF NOT EXISTS `index_local_strategies_userId_active` " +
-                        "ON `local_strategies` (`userId`, `active`)"
-                )
-
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `local_risk_policies` (
-                        `userId` TEXT NOT NULL,
-                        `maxTradeAmount` REAL NOT NULL,
-                        `maxDailyLoss` REAL NOT NULL,
-                        `maxConsecutiveLosses` INTEGER NOT NULL,
-                        `maxDailyTrades` INTEGER NOT NULL,
-                        `maxPortfolioExposure` REAL NOT NULL,
-                        `cooldownMinutes` INTEGER NOT NULL,
-                        `emergencyStopped` INTEGER NOT NULL,
-                        `autoTradeEnabled` INTEGER NOT NULL,
-                        `createdAtMillis` INTEGER NOT NULL,
-                        `updatedAtMillis` INTEGER NOT NULL,
-                        PRIMARY KEY(`userId`)
-                    )
-                    """.trimIndent()
-                )
-
-                db.execSQL(
-                    """
-                    CREATE TABLE IF NOT EXISTS `local_daily_summaries` (
-                        `summaryId` TEXT NOT NULL,
-                        `userId` TEXT NOT NULL,
-                        `dateKey` TEXT NOT NULL,
-                        `totalTrades` INTEGER NOT NULL,
-                        `wins` INTEGER NOT NULL,
-                        `losses` INTEGER NOT NULL,
-                        `netPnl` REAL NOT NULL,
-                        `consecutiveLosses` INTEGER NOT NULL,
-                        `peakDrawdown` REAL NOT NULL,
-                        `createdAtMillis` INTEGER NOT NULL,
-                        `updatedAtMillis` INTEGER NOT NULL,
-                        PRIMARY KEY(`summaryId`)
-                    )
-                    """.trimIndent()
-                )
-                db.execSQL(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_local_daily_summaries_userId_dateKey` " +
-                        "ON `local_daily_summaries` (`userId`, `dateKey`)"
-                )
+                db.execSQL("CREATE TABLE IF NOT EXISTS local_strategy_configs (id TEXT NOT NULL PRIMARY KEY, userId TEXT NOT NULL, name TEXT NOT NULL, instrument TEXT NOT NULL, timeframe TEXT NOT NULL, tradeAmount REAL NOT NULL, expirySeconds INTEGER NOT NULL, rsiPeriod INTEGER NOT NULL, rsiOversold INTEGER NOT NULL, rsiOverbought INTEGER NOT NULL, emaFast INTEGER NOT NULL, emaSlow INTEGER NOT NULL, macdFast INTEGER NOT NULL, macdSlow INTEGER NOT NULL, macdSignal INTEGER NOT NULL, bbPeriod INTEGER NOT NULL, bbStdDev REAL NOT NULL, minConfidence INTEGER NOT NULL, active INTEGER NOT NULL, updatedAtMillis INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_local_strategy_configs_userId ON local_strategy_configs(userId)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS local_risk_policies (id TEXT NOT NULL PRIMARY KEY, userId TEXT NOT NULL, maxTradeAmount REAL NOT NULL, maxDailyLoss REAL NOT NULL, maxConsecutiveLosses INTEGER NOT NULL, maxDailyTrades INTEGER NOT NULL, maxPortfolioExposure REAL NOT NULL, cooldownMinutes INTEGER NOT NULL, emergencyStopped INTEGER NOT NULL, autoTradeEnabled INTEGER NOT NULL, updatedAtMillis INTEGER NOT NULL)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS local_user_profile (id TEXT NOT NULL PRIMARY KEY, userId TEXT NOT NULL, displayName TEXT NOT NULL, executionMode TEXT NOT NULL, simulationBalance REAL NOT NULL, updatedAtMillis INTEGER NOT NULL)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS local_daily_pnl_summaries (dateKey TEXT NOT NULL PRIMARY KEY, userId TEXT NOT NULL, totalTrades INTEGER NOT NULL, wins INTEGER NOT NULL, losses INTEGER NOT NULL, netPnl REAL NOT NULL, consecutiveLosses INTEGER NOT NULL, peakDrawdown REAL NOT NULL, updatedAtMillis INTEGER NOT NULL)")
+                db.execSQL("INSERT OR IGNORE INTO local_user_profile (id,userId,displayName,executionMode,simulationBalance,updatedAtMillis) VALUES ('local','local','Trader','SIMULATION',10000.0,0)")
             }
         }
 
         val MIGRATION_3_4: Migration = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    "ALTER TABLE `local_trade_logs` ADD COLUMN `marketRegime` TEXT NOT NULL DEFAULT 'UNKNOWN'"
-                )
+                db.execSQL("CREATE TABLE local_trade_logs_new (tradeId TEXT NOT NULL PRIMARY KEY, userId TEXT NOT NULL, instrument TEXT NOT NULL, timeframe TEXT NOT NULL, direction TEXT NOT NULL, mode TEXT NOT NULL, amount REAL NOT NULL, payoutRate REAL NOT NULL, entryPrice REAL NOT NULL, exitPrice REAL NOT NULL, status TEXT NOT NULL, pnl REAL NOT NULL, strategyName TEXT NOT NULL, confidenceScore INTEGER NOT NULL, calibratedProbability REAL NOT NULL, explanation TEXT NOT NULL, createdAtMillis INTEGER NOT NULL)")
+                db.execSQL("INSERT INTO local_trade_logs_new (tradeId,userId,instrument,timeframe,direction,mode,amount,payoutRate,entryPrice,exitPrice,status,pnl,strategyName,confidenceScore,calibratedProbability,explanation,createdAtMillis) SELECT tradeId,userId,instrument,timeframe,direction,mode,amount,payoutRate,entryPrice,exitPrice,status,pnl,strategyName,confidenceScore,calibratedProbability,explanation,createdAtMillis FROM local_trade_logs")
+                db.execSQL("DROP TABLE local_trade_logs")
+                db.execSQL("ALTER TABLE local_trade_logs_new RENAME TO local_trade_logs")
+                db.execSQL("CREATE TABLE IF NOT EXISTS legacy_local_queue_archive (queueId TEXT NOT NULL PRIMARY KEY, userId TEXT NOT NULL, entityType TEXT NOT NULL, documentId TEXT NOT NULL, payloadJson TEXT NOT NULL, clientModifiedMillis INTEGER NOT NULL, retryCount INTEGER NOT NULL, nextRetryMillis INTEGER NOT NULL, lastError TEXT, status TEXT NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_legacy_local_queue_archive_userId_status_nextRetryMillis ON legacy_local_queue_archive(userId, status, nextRetryMillis)")
+                db.execSQL("INSERT OR IGNORE INTO legacy_local_queue_archive (queueId,userId,entityType,documentId,payloadJson,clientModifiedMillis,retryCount,nextRetryMillis,lastError,status) SELECT queueId,userId,entityType,documentId,payloadJson,clientModifiedMillis,retryCount,nextRetryMillis,lastError,status FROM sync_queue")
+                db.execSQL("DROP TABLE IF EXISTS sync_queue")
             }
         }
 
@@ -354,7 +193,7 @@ abstract class TradingDatabase : RoomDatabase() {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     TradingDatabase::class.java,
-                    DATABASE_NAME
+                    "iq_trading_local_cache.db"
                 )
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
