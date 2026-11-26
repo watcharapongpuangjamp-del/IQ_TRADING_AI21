@@ -50,7 +50,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -188,7 +187,6 @@ private fun AuthenticatedTradingShell(
     val integrationSettings by viewModel.integrationSettings.collectAsStateWithLifecycle()
     val backendHealth by viewModel.backendHealth.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
-    val isSyncingCloud by viewModel.isSyncingCloud.collectAsStateWithLifecycle()
     val mlModels by viewModel.mlModels.collectAsStateWithLifecycle()
     val activeMlModel by viewModel.activeMlModel.collectAsStateWithLifecycle()
     val isMlBusy by viewModel.isMlBusy.collectAsStateWithLifecycle()
@@ -379,15 +377,12 @@ private fun AuthenticatedTradingShell(
                                 userProfile = userProfile,
                                 settings = integrationSettings,
                                 backendHealth = backendHealth,
-                                isSyncingCloud = isSyncingCloud,
                                 onSwitchMode = viewModel::switchExecutionMode,
                                 onResetBalance = viewModel::resetSimulationBalance,
                                 onSaveIntegrations = viewModel::saveIntegrationsAndTestBackend,
                                 onTestBackend = viewModel::testBackendConnection,
                                 onSendTelegramTest = viewModel::sendTelegramTest,
                                 onSendLocalNotificationTest = viewModel::sendLocalNotificationTest,
-                                onSyncCloudNow = viewModel::syncCloudBackupNow,
-                                onSignOut = {}
                             )
                         }
                     }
@@ -401,7 +396,7 @@ private fun AuthenticatedTradingShell(
                                 .padding(12.dp)
                         ) {
                             Text(
-                                text = "Cloud Sync: $cloudError",
+                                text = "Local Database: $cloudError",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = tradingColors.bearish,
                                 modifier = Modifier.padding(10.dp)
