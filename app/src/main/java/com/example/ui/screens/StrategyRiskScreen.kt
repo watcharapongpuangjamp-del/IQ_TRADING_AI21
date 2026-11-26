@@ -79,25 +79,25 @@ fun StrategyRiskScreen(
     val tradingColors = LocalTradingColors.current
     var selectedTab by remember { mutableIntStateOf(0) }
 
-    // Strategy editable state synced from cloud
-    var strategyName by remember(strategy.id) { mutableStateOf(strategy.name) }
-    var tradeAmount by remember(strategy.id) { mutableDoubleStateOf(strategy.tradeAmount) }
-    var rsiPeriod by remember(strategy.id) { mutableIntStateOf(strategy.rsiPeriod) }
-    var rsiOversold by remember(strategy.id) { mutableIntStateOf(strategy.rsiOversold) }
-    var rsiOverbought by remember(strategy.id) { mutableIntStateOf(strategy.rsiOverbought) }
-    var emaFast by remember(strategy.id) { mutableIntStateOf(strategy.emaFast) }
-    var emaSlow by remember(strategy.id) { mutableIntStateOf(strategy.emaSlow) }
-    var bbPeriod by remember(strategy.id) { mutableIntStateOf(strategy.bbPeriod) }
-    var bbStdDev by remember(strategy.id) { mutableDoubleStateOf(strategy.bbStdDev) }
-    var minConfidence by remember(strategy.id) { mutableIntStateOf(strategy.minConfidence) }
+    // Strategy editable state synced from local SQLite
+    var strategyName by remember(strategy.id, strategy.updatedAtMillis) { mutableStateOf(strategy.name) }
+    var tradeAmount by remember(strategy.id, strategy.updatedAtMillis) { mutableDoubleStateOf(strategy.tradeAmount) }
+    var rsiPeriod by remember(strategy.id, strategy.updatedAtMillis) { mutableIntStateOf(strategy.rsiPeriod) }
+    var rsiOversold by remember(strategy.id, strategy.updatedAtMillis) { mutableIntStateOf(strategy.rsiOversold) }
+    var rsiOverbought by remember(strategy.id, strategy.updatedAtMillis) { mutableIntStateOf(strategy.rsiOverbought) }
+    var emaFast by remember(strategy.id, strategy.updatedAtMillis) { mutableIntStateOf(strategy.emaFast) }
+    var emaSlow by remember(strategy.id, strategy.updatedAtMillis) { mutableIntStateOf(strategy.emaSlow) }
+    var bbPeriod by remember(strategy.id, strategy.updatedAtMillis) { mutableIntStateOf(strategy.bbPeriod) }
+    var bbStdDev by remember(strategy.id, strategy.updatedAtMillis) { mutableDoubleStateOf(strategy.bbStdDev) }
+    var minConfidence by remember(strategy.id, strategy.updatedAtMillis) { mutableIntStateOf(strategy.minConfidence) }
 
     // Risk policy editable state
-    var maxTradeAmount by remember(riskPolicy.updatedAt) { mutableDoubleStateOf(riskPolicy.maxTradeAmount) }
-    var maxDailyLoss by remember(riskPolicy.updatedAt) { mutableDoubleStateOf(riskPolicy.maxDailyLoss) }
-    var maxConsecutiveLosses by remember(riskPolicy.updatedAt) { mutableIntStateOf(riskPolicy.maxConsecutiveLosses) }
-    var maxDailyTrades by remember(riskPolicy.updatedAt) { mutableIntStateOf(riskPolicy.maxDailyTrades) }
-    var maxPortfolioExposure by remember(riskPolicy.updatedAt) { mutableDoubleStateOf(riskPolicy.maxPortfolioExposure) }
-    var cooldownMinutes by remember(riskPolicy.updatedAt) { mutableIntStateOf(riskPolicy.cooldownMinutes) }
+    var maxTradeAmount by remember(riskPolicy.updatedAtMillis) { mutableDoubleStateOf(riskPolicy.maxTradeAmount) }
+    var maxDailyLoss by remember(riskPolicy.updatedAtMillis) { mutableDoubleStateOf(riskPolicy.maxDailyLoss) }
+    var maxConsecutiveLosses by remember(riskPolicy.updatedAtMillis) { mutableIntStateOf(riskPolicy.maxConsecutiveLosses) }
+    var maxDailyTrades by remember(riskPolicy.updatedAtMillis) { mutableIntStateOf(riskPolicy.maxDailyTrades) }
+    var maxPortfolioExposure by remember(riskPolicy.updatedAtMillis) { mutableDoubleStateOf(riskPolicy.maxPortfolioExposure) }
+    var cooldownMinutes by remember(riskPolicy.updatedAtMillis) { mutableIntStateOf(riskPolicy.cooldownMinutes) }
 
     LaunchedEffect(strategy) {
         strategyName = strategy.name

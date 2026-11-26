@@ -3,16 +3,12 @@ package com.example.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.local.CachedCandleEntity
-import com.example.data.local.LocalTradeCacheEntity
-import com.example.data.local.OfflineSyncQueueManager
-import com.example.data.local.TradingDao
 import com.example.data.remote.BackendConnectorClient
 import com.example.data.remote.MarketIntelligenceResponseDto
 import com.example.data.remote.OrderSubmitRequestDto
 import com.example.data.remote.ReplayEvaluationResponseDto
 import com.example.data.remote.TelegramNotifier
-import com.example.data.repository.TradingCloudRepository
+import com.example.data.repository.LocalTradingRepository
 import com.example.engine.LocalStrategySelectorEngine
 import com.example.engine.MarketSimulationEngine
 import com.example.engine.MultiTimeframeLocalEngine
@@ -28,11 +24,11 @@ import com.example.model.DriftStatus
 import com.example.model.ExecutionMode
 import com.example.model.ExecutionStage
 import com.example.model.IntegrationSettings
+import com.example.model.LocalDatabaseStats
 import com.example.model.MarketRegime
 import com.example.model.MlDriftReport
 import com.example.model.MlModelSummary
 import com.example.model.MultiTimeframeReport
-import com.example.model.OfflineSyncStatus
 import com.example.model.OrderLifecycleEvent
 import com.example.model.OrderLifecycleState
 import com.example.model.ReplaySessionState
@@ -52,9 +48,7 @@ import com.example.model.UserProfile
 import com.example.model.WebSocketConnectionState
 import com.example.security.SecureCredentialVault
 import com.example.ui.notifications.TradingNotificationHelper
-import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,13 +61,12 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.util.UUID
 
-sealed interface CloudUiState<out T> {
-    data object Loading : CloudUiState<Nothing>
-    data class Success<T>(val data: T) : CloudUiState<T>
-    data class Error(val message: String) : CloudUiState<Nothing>
+sealed interface LocalUiState<out T> {
+    data object Loading : LocalUiState<Nothing>
+    data class Success<T>(val data: T) : LocalUiState<T>
+    data class Error(val message: String) : LocalUiState<Nothing>
 }
 
 data class TerminalUiState(
@@ -101,7 +94,6 @@ data class TerminalUiState(
     val autoSelectStrategy: Boolean = true,
     val pinnedStrategyId: String? = null,
     val wsState: WebSocketConnectionState = WebSocketConnectionState(),
-    val offlineSyncStatus: OfflineSyncStatus = OfflineSyncStatus(),
     val activeModelDriftStatus: DriftStatus = DriftStatus.HEALTHY,
     val activeModelDriftScore: Double = 0.0,
     val activeModelDriftNotes: String = "",
@@ -109,19 +101,17 @@ data class TerminalUiState(
 )
 
 class TradingViewModel(
-    private val cloudRepository: TradingCloudRepository,
-    private val tradingDao: TradingDao,
+    private val localRepository: LocalTradingRepository,
     private val credentialVault: SecureCredentialVault,
     private val telegramNotifier: TelegramNotifier,
     private val backendClient: BackendConnectorClient,
     private val notificationHelper: TradingNotificationHelper,
-    private val currentUserId: String,
-    private val userDisplayName: String,
-    private val userEmail: String?
+    private val currentUserId: String = "local_trader",
+    private val userDisplayName: String = "Local Trader",
+    private val userEmail: String? = null
 ) : ViewModel() {
 
     private val simEngine = MarketSimulationEngine()
-    private val syncQueueManager = OfflineSyncQueueManager(tradingDao, cloudRepository)
     private val _terminalState = MutableStateFlow(TerminalUiState())
     val terminalState: StateFlow<TerminalUiState> = _terminalState.asStateFlow()
 
@@ -130,9 +120,6 @@ class TradingViewModel(
 
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
-
-    private val _isSyncingCloud = MutableStateFlow(false)
-    val isSyncingCloud: StateFlow<Boolean> = _isSyncingCloud.asStateFlow()
 
     private val _mlModels = MutableStateFlow<List<MlModelSummary>>(emptyList())
     val mlModels: StateFlow<List<MlModelSummary>> = _mlModels.asStateFlow()
@@ -152,35 +139,39 @@ class TradingViewModel(
     val integrationSettings: StateFlow<IntegrationSettings> = credentialVault.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), IntegrationSettings())
 
-    val profileState: StateFlow<CloudUiState<UserProfile?>> =
-        cloudRepository.observeUserProfile(currentUserId)
-            .map<UserProfile?, CloudUiState<UserProfile?>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapFirestoreError(it, "โหลดข้อมูลโปรไฟล์ไม่สำเร็จ"))) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
+    val databaseStats: StateFlow<LocalDatabaseStats> = localRepository.observeDatabaseStats(currentUserId)
+        .catch { emit(LocalDatabaseStats()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LocalDatabaseStats())
 
-    val strategiesState: StateFlow<CloudUiState<List<StrategyConfig>>> =
-        cloudRepository.observeStrategies(currentUserId)
-            .map<List<StrategyConfig>, CloudUiState<List<StrategyConfig>>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapFirestoreError(it, "โหลดกลยุทธ์จากคลาวด์ไม่สำเร็จ"))) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
+    val profileState: StateFlow<LocalUiState<UserProfile?>> =
+        localRepository.observeUserProfile(currentUserId)
+            .map<UserProfile?, LocalUiState<UserProfile?>> { LocalUiState.Success(it) }
+            .catch { emit(LocalUiState.Error(unwrapSqlError(it, "โหลดข้อมูลโปรไฟล์ SQLite ไม่สำเร็จ"))) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LocalUiState.Loading)
 
-    val riskPolicyState: StateFlow<CloudUiState<RiskPolicy?>> =
-        cloudRepository.observeRiskPolicy(currentUserId)
-            .map<RiskPolicy?, CloudUiState<RiskPolicy?>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapFirestoreError(it, "โหลดนโยบายความเสี่ยงไม่สำเร็จ"))) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
+    val strategiesState: StateFlow<LocalUiState<List<StrategyConfig>>> =
+        localRepository.observeStrategies(currentUserId)
+            .map<List<StrategyConfig>, LocalUiState<List<StrategyConfig>>> { LocalUiState.Success(it) }
+            .catch { emit(LocalUiState.Error(unwrapSqlError(it, "โหลดกลยุทธ์จาก SQLite ไม่สำเร็จ"))) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LocalUiState.Loading)
 
-    val tradesState: StateFlow<CloudUiState<List<TradeRecord>>> =
-        cloudRepository.observeTrades(currentUserId)
-            .map<List<TradeRecord>, CloudUiState<List<TradeRecord>>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapFirestoreError(it, "โหลดประวัติการเทรดไม่สำเร็จ"))) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
+    val riskPolicyState: StateFlow<LocalUiState<RiskPolicy?>> =
+        localRepository.observeRiskPolicy(currentUserId)
+            .map<RiskPolicy?, LocalUiState<RiskPolicy?>> { LocalUiState.Success(it) }
+            .catch { emit(LocalUiState.Error(unwrapSqlError(it, "โหลดนโยบายความเสี่ยง SQLite ไม่สำเร็จ"))) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LocalUiState.Loading)
 
-    val dailySummariesState: StateFlow<CloudUiState<List<DailyPnLSummary>>> =
-        cloudRepository.observeDailySummaries(currentUserId)
-            .map<List<DailyPnLSummary>, CloudUiState<List<DailyPnLSummary>>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapFirestoreError(it, "โหลดสรุปผลรายวันไม่สำเร็จ"))) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
+    val tradesState: StateFlow<LocalUiState<List<TradeRecord>>> =
+        localRepository.observeTrades(currentUserId)
+            .map<List<TradeRecord>, LocalUiState<List<TradeRecord>>> { LocalUiState.Success(it) }
+            .catch { emit(LocalUiState.Error(unwrapSqlError(it, "โหลดประวัติการเทรด SQLite ไม่สำเร็จ"))) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LocalUiState.Loading)
+
+    val dailySummariesState: StateFlow<LocalUiState<List<DailyPnLSummary>>> =
+        localRepository.observeDailySummaries(currentUserId)
+            .map<List<DailyPnLSummary>, LocalUiState<List<DailyPnLSummary>>> { LocalUiState.Success(it) }
+            .catch { emit(LocalUiState.Error(unwrapSqlError(it, "โหลดสรุปผลรายวัน SQLite ไม่สำเร็จ"))) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LocalUiState.Loading)
 
     private var marketFeedJob: Job? = null
     private var localReplayBuffer: List<Candle> = emptyList()
@@ -189,31 +180,8 @@ class TradingViewModel(
 
     init {
         viewModelScope.launch {
-            cloudRepository.ensureUserBootstrap(currentUserId, userDisplayName, userEmail)
-                .onFailure { _snackbarMessage.value = "ซิงค์เริ่มต้นไม่สำเร็จ: ${it.localizedMessage}" }
-            flushOfflineSyncQueue(forceRetryFailed = false, notifyUser = false)
-        }
-        viewModelScope.launch {
-            tradingDao.observePendingSyncCount(currentUserId).collect { pending ->
-                _terminalState.update {
-                    it.copy(offlineSyncStatus = it.offlineSyncStatus.copy(pendingCount = pending))
-                }
-            }
-        }
-        viewModelScope.launch {
-            tradingDao.observeFailedSyncCount(currentUserId).collect { failed ->
-                _terminalState.update {
-                    it.copy(offlineSyncStatus = it.offlineSyncStatus.copy(failedCount = failed))
-                }
-            }
-        }
-        viewModelScope.launch {
-            while (isActive) {
-                delay(20_000L)
-                if (_terminalState.value.offlineSyncStatus.pendingCount > 0) {
-                    flushOfflineSyncQueue(forceRetryFailed = false, notifyUser = false)
-                }
-            }
+            localRepository.ensureUserBootstrap(currentUserId, userDisplayName, userEmail)
+                .onFailure { _snackbarMessage.value = "เตรียมฐานข้อมูล SQLite เริ่มต้นไม่สำเร็จ: ${it.localizedMessage}" }
         }
         startMarketStream()
     }
@@ -282,7 +250,7 @@ class TradingViewModel(
                 }
             }
 
-            cacheCandlesToRoom(instrument, tf.code, candles)
+            localRepository.cacheCandles(instrument, tf.code, candles)
             applyAnalysis(candles, transport, remoteIntel)
 
             val wsUrl = backendClient.resolveWebSocketUrl(
@@ -365,9 +333,6 @@ class TradingViewModel(
                                 lastError = null
                             )
                         )
-                    }
-                    viewModelScope.launch {
-                        flushOfflineSyncQueue(forceRetryFailed = false, notifyUser = false)
                     }
                 },
                 onTick = { tick ->
@@ -775,7 +740,7 @@ class TradingViewModel(
 
             if (!riskResult.allowed) {
                 if (isAuto && (policy.emergencyStopped || riskResult.remainingDailyTrades == 0 || riskResult.remainingLossBudget <= 0.0)) {
-                    cloudRepository.saveRiskPolicy(policy.copy(autoTradeEnabled = false))
+                    localRepository.saveRiskPolicy(policy.copy(autoTradeEnabled = false))
                     dispatchAlerts(
                         isRiskAlert = true,
                         title = "RISK GUARD LOCKOUT",
@@ -832,6 +797,7 @@ class TradingViewModel(
 
                 if (lifecycle == OrderLifecycleState.PENDING || lifecycle == OrderLifecycleState.UNKNOWN) {
                     val openTrade = TradeRecord(
+                        id = dto.order_id.ifBlank { "sql_${UUID.randomUUID().toString().take(12)}" },
                         userId = currentUserId,
                         instrument = strategy.instrument,
                         timeframe = _terminalState.value.selectedTimeframe.code,
@@ -841,31 +807,14 @@ class TradingViewModel(
                         payoutRate = spec.payoutRate,
                         entryPrice = dto.entry_price,
                         exitPrice = 0.0,
-                        status = TradeStatus.OPEN.name,
+                        status = TradeStatus.toNormalizedStatus(lifecycle.name),
                         pnl = 0.0,
                         strategyName = strategy.name,
                         confidenceScore = currentSignal.confidenceScore,
                         calibratedProbability = currentSignal.calibratedProbability,
                         explanation = "${currentSignal.explanation} [Corr: ${dto.correlation_id} | State: ${lifecycle.name}]"
                     )
-                    val createResult = cloudRepository.createTrade(openTrade)
-                    val localId = createResult.getOrElse { dto.order_id.ifBlank { UUID.randomUUID().toString() } }
-                    if (createResult.isFailure) {
-                        syncQueueManager.enqueueTradeCreate(localId, openTrade)
-                    }
-                    persistTradeToRoom(
-                        tradeId = localId,
-                        strategy = strategy,
-                        direction = directionToUse,
-                        mode = mode,
-                        payoutRate = spec.payoutRate,
-                        entryPrice = dto.entry_price,
-                        exitPrice = 0.0,
-                        status = lifecycle.name,
-                        pnl = 0.0,
-                        signal = currentSignal,
-                        syncedToCloud = createResult.isSuccess
-                    )
+                    localRepository.createTrade(openTrade)
                     refreshBackendExecutionState(settings.backendBaseUrl, backendToken)
                     finishPipeline(
                         ExecutionStage.IDLE,
@@ -891,6 +840,7 @@ class TradingViewModel(
 
                 _terminalState.update { it.copy(executionStage = ExecutionStage.TRADE_LOGGING) }
                 val settledTrade = TradeRecord(
+                    id = dto.order_id.ifBlank { "sql_${UUID.randomUUID().toString().take(12)}" },
                     userId = currentUserId,
                     instrument = strategy.instrument,
                     timeframe = _terminalState.value.selectedTimeframe.code,
@@ -900,31 +850,14 @@ class TradingViewModel(
                     payoutRate = spec.payoutRate,
                     entryPrice = dto.entry_price,
                     exitPrice = dto.exit_price,
-                    status = TradeStatus.toFirestoreStatus(finalStatus.name),
+                    status = TradeStatus.toNormalizedStatus(finalStatus.name),
                     pnl = dto.pnl,
                     strategyName = strategy.name,
                     confidenceScore = currentSignal.confidenceScore,
                     calibratedProbability = currentSignal.calibratedProbability,
                     explanation = "${currentSignal.explanation} [Corr: ${dto.correlation_id}]"
                 )
-                val createSettled = cloudRepository.createTrade(settledTrade)
-                val createdId = createSettled.getOrElse { dto.order_id.ifBlank { UUID.randomUUID().toString() } }
-                if (createSettled.isFailure) {
-                    syncQueueManager.enqueueTradeCreate(createdId, settledTrade)
-                }
-                persistTradeToRoom(
-                    tradeId = createdId,
-                    strategy = strategy,
-                    direction = directionToUse,
-                    mode = mode,
-                    payoutRate = spec.payoutRate,
-                    entryPrice = dto.entry_price,
-                    exitPrice = dto.exit_price,
-                    status = finalStatus.name,
-                    pnl = dto.pnl,
-                    signal = currentSignal,
-                    syncedToCloud = createSettled.isSuccess
-                )
+                localRepository.createTrade(settledTrade)
 
                 _terminalState.update { it.copy(executionStage = ExecutionStage.PERFORMANCE_EVAL) }
                 updateProfileAndDailySummary(pnl = dto.pnl, won = won)
@@ -950,7 +883,9 @@ class TradingViewModel(
                 return
             }
 
+            val localTradeId = "sql_${UUID.randomUUID().toString().take(12)}"
             val pendingTrade = TradeRecord(
+                id = localTradeId,
                 userId = currentUserId,
                 instrument = strategy.instrument,
                 timeframe = _terminalState.value.selectedTimeframe.code,
@@ -967,11 +902,7 @@ class TradingViewModel(
                 calibratedProbability = currentSignal.calibratedProbability,
                 explanation = currentSignal.explanation
             )
-            val createPendingRes = cloudRepository.createTrade(pendingTrade)
-            val createdId = createPendingRes.getOrElse { "local_${UUID.randomUUID().toString().take(12)}" }
-            if (createPendingRes.isFailure) {
-                syncQueueManager.enqueueTradeCreate(createdId, pendingTrade)
-            }
+            localRepository.createTrade(pendingTrade)
 
             dispatchAlerts(
                 isSignal = true,
@@ -1003,29 +934,7 @@ class TradingViewModel(
             val pnl = if (won) strategy.tradeAmount * spec.payoutRate else -strategy.tradeAmount
 
             _terminalState.update { it.copy(executionStage = ExecutionStage.TRADE_LOGGING) }
-            val settleRes = cloudRepository.settleTrade(createdId, exitPrice, finalStatus, pnl)
-            if (settleRes.isFailure) {
-                syncQueueManager.enqueueTradeSettle(
-                    userId = currentUserId,
-                    tradeId = createdId,
-                    exitPrice = exitPrice,
-                    status = finalStatus,
-                    pnl = pnl
-                )
-            }
-            persistTradeToRoom(
-                tradeId = createdId,
-                strategy = strategy,
-                direction = directionToUse,
-                mode = mode,
-                payoutRate = spec.payoutRate,
-                entryPrice = entryPrice,
-                exitPrice = exitPrice,
-                status = finalStatus.name,
-                pnl = pnl,
-                signal = currentSignal,
-                syncedToCloud = createPendingRes.isSuccess && settleRes.isSuccess
-            )
+            localRepository.settleTrade(localTradeId, exitPrice, finalStatus, pnl)
 
             _terminalState.update { it.copy(executionStage = ExecutionStage.PERFORMANCE_EVAL) }
             updateProfileAndDailySummary(pnl = pnl, won = won)
@@ -1228,74 +1137,7 @@ class TradingViewModel(
         }
     }
 
-    private suspend fun persistTradeToRoom(
-        tradeId: String,
-        strategy: StrategyConfig,
-        direction: TradeDirection,
-        mode: ExecutionMode,
-        payoutRate: Double,
-        entryPrice: Double,
-        exitPrice: Double,
-        status: String,
-        pnl: Double,
-        signal: SignalAnalysis,
-        syncedToCloud: Boolean = true
-    ) {
-        withContext(Dispatchers.IO) {
-            tradingDao.upsertTrade(
-                LocalTradeCacheEntity(
-                    tradeId = tradeId,
-                    userId = currentUserId,
-                    instrument = strategy.instrument,
-                    timeframe = _terminalState.value.selectedTimeframe.code,
-                    direction = direction.name,
-                    mode = mode.name,
-                    amount = strategy.tradeAmount,
-                    payoutRate = payoutRate,
-                    entryPrice = entryPrice,
-                    exitPrice = exitPrice,
-                    status = status,
-                    pnl = pnl,
-                    strategyName = strategy.name,
-                    confidenceScore = signal.confidenceScore,
-                    calibratedProbability = signal.calibratedProbability,
-                    explanation = signal.explanation,
-                    createdAtMillis = System.currentTimeMillis(),
-                    syncedToCloud = syncedToCloud
-                )
-            )
-        }
-    }
-
-    // --- Offline-First Sync Queue & 8-Module Strategy Selector (Phase 6) ---
-
-    fun flushOfflineSyncQueue(forceRetryFailed: Boolean = true, notifyUser: Boolean = true) {
-        viewModelScope.launch {
-            _terminalState.update {
-                it.copy(offlineSyncStatus = it.offlineSyncStatus.copy(isFlushing = true))
-            }
-            val res = syncQueueManager.flushPending(currentUserId, forceRetryFailed = forceRetryFailed)
-            _terminalState.update { state ->
-                val cur = state.offlineSyncStatus
-                state.copy(
-                    offlineSyncStatus = cur.copy(
-                        isFlushing = false,
-                        lastSyncedAtMillis = if (res.syncedCount > 0) System.currentTimeMillis() else cur.lastSyncedAtMillis,
-                        lastError = res.lastError
-                    )
-                )
-            }
-            if (notifyUser) {
-                _snackbarMessage.value = when {
-                    res.syncedCount > 0 && res.failedCount == 0 ->
-                        "ซิงค์คิวออฟไลน์สำเร็จ ${res.syncedCount} รายการขึ้น Firestore แล้ว"
-                    res.failedCount > 0 ->
-                        "ซิงค์ค้างบางส่วน (${res.syncedCount} สำเร็จ / ${res.failedCount} รอลองใหม่): ${res.lastError.orEmpty()}"
-                    else -> "ไม่มีรายการค้างซิงค์ในคิวออฟไลน์"
-                }
-            }
-        }
-    }
+    // --- 8-Module Strategy Selector (Phase 6) ---
 
     fun refreshStrategyModules() {
         viewModelScope.launch {
@@ -1403,15 +1245,13 @@ class TradingViewModel(
                 return@launch
             }
             val updated = policy.copy(autoTradeEnabled = enabled)
-            cloudRepository.saveRiskPolicy(updated)
+            localRepository.saveRiskPolicy(updated)
                 .onSuccess {
                     syncRiskToBackendIfConnected(updated)
                     _snackbarMessage.value = if (enabled) "เปิดระบบเทรดอัตโนมัติ (SIMULATION)" else "ปิดระบบเทรดอัตโนมัติแล้ว"
                 }
                 .onFailure {
-                    syncQueueManager.enqueueRiskPolicy(updated, currentUserId)
-                    syncRiskToBackendIfConnected(updated)
-                    _snackbarMessage.value = "บันทึกลงคิวออฟไลน์แล้ว (รออัพเดต Auto-Trade ขึ้น Cloud)"
+                    _snackbarMessage.value = "บันทึกสถานะ Auto-Trade ลง SQLite ไม่สำเร็จ: ${it.localizedMessage}"
                 }
         }
     }
@@ -1420,8 +1260,7 @@ class TradingViewModel(
         viewModelScope.launch {
             val policy = currentRiskPolicy()
             val updated = policy.copy(emergencyStopped = true, autoTradeEnabled = false)
-            cloudRepository.saveRiskPolicy(updated)
-                .onFailure { syncQueueManager.enqueueRiskPolicy(updated, currentUserId) }
+            localRepository.saveRiskPolicy(updated)
             val baseUrl = integrationSettings.value.backendBaseUrl
             if (backendClient.isValidHttpUrl(baseUrl)) {
                 backendClient.syncEmergencyStop(baseUrl, credentialVault.getBackendToken(), stopped = true)
@@ -1439,8 +1278,7 @@ class TradingViewModel(
         viewModelScope.launch {
             val policy = currentRiskPolicy()
             val updated = policy.copy(emergencyStopped = false)
-            cloudRepository.saveRiskPolicy(updated)
-                .onFailure { syncQueueManager.enqueueRiskPolicy(updated, currentUserId) }
+            localRepository.saveRiskPolicy(updated)
             val baseUrl = integrationSettings.value.backendBaseUrl
             if (backendClient.isValidHttpUrl(baseUrl)) {
                 backendClient.syncEmergencyStop(baseUrl, credentialVault.getBackendToken(), stopped = false)
@@ -1455,13 +1293,12 @@ class TradingViewModel(
             if (backendClient.isValidHttpUrl(baseUrl)) {
                 backendClient.syncStrategy(baseUrl, credentialVault.getBackendToken(), strategy)
             }
-            cloudRepository.saveStrategy(strategy)
+            localRepository.saveStrategy(strategy)
                 .onSuccess {
-                    _snackbarMessage.value = "บันทึกกลยุทธ์ '${strategy.name}' และซิงค์แล้ว"
+                    _snackbarMessage.value = "บันทึกกลยุทธ์ '${strategy.name}' ลง SQLite แล้ว"
                 }
                 .onFailure {
-                    syncQueueManager.enqueueStrategy(strategy, currentUserId)
-                    _snackbarMessage.value = "บันทึกกลยุทธ์ '${strategy.name}' ในคิวออฟไลน์แล้ว (รอซิงค์ Cloud)"
+                    _snackbarMessage.value = "บันทึกกลยุทธ์ไม่สำเร็จ: ${it.localizedMessage}"
                 }
         }
     }
@@ -1469,13 +1306,12 @@ class TradingViewModel(
     fun saveRiskPolicyConfig(policy: RiskPolicy) {
         viewModelScope.launch {
             syncRiskToBackendIfConnected(policy)
-            cloudRepository.saveRiskPolicy(policy)
+            localRepository.saveRiskPolicy(policy)
                 .onSuccess {
-                    _snackbarMessage.value = "บันทึกนโยบาย Risk Management แล้ว"
+                    _snackbarMessage.value = "บันทึกนโยบาย Risk Management ลง SQLite แล้ว"
                 }
                 .onFailure {
-                    syncQueueManager.enqueueRiskPolicy(policy, currentUserId)
-                    _snackbarMessage.value = "บันทึกนโยบาย Risk ในคิวออฟไลน์แล้ว (รอซิงค์ Cloud)"
+                    _snackbarMessage.value = "บันทึกนโยบาย Risk ไม่สำเร็จ: ${it.localizedMessage}"
                 }
         }
     }
@@ -1501,15 +1337,23 @@ class TradingViewModel(
                     return@launch
                 }
             }
-            cloudRepository.updateUserBalanceAndMode(currentBalance(), targetMode)
+            localRepository.updateUserBalanceAndMode(currentUserId, currentBalance(), targetMode, markSavedTimestamp = true)
                 .onSuccess { _snackbarMessage.value = "สลับโหมดเป็น ${targetMode.label} แล้ว" }
         }
     }
 
     fun resetSimulationBalance() {
         viewModelScope.launch {
-            cloudRepository.updateUserBalanceAndMode(10000.0, ExecutionMode.SIMULATION)
-                .onSuccess { _snackbarMessage.value = "รีเซ็ตยอด Simulation Balance เป็น $10,000.00 แล้ว" }
+            localRepository.updateUserBalanceAndMode(currentUserId, 10000.0, ExecutionMode.SIMULATION, markSavedTimestamp = true)
+                .onSuccess { _snackbarMessage.value = "รีเซ็ตยอด Simulation Balance ใน SQLite เป็น $10,000.00 แล้ว" }
+        }
+    }
+
+    fun updateLocalTraderName(displayName: String) {
+        viewModelScope.launch {
+            localRepository.updateDisplayName(currentUserId, displayName)
+                .onSuccess { _snackbarMessage.value = "บันทึกชื่อโปรไฟล์ลง SQLite แล้ว" }
+                .onFailure { _snackbarMessage.value = "บันทึกชื่อโปรไฟล์ไม่สำเร็จ: ${it.localizedMessage}" }
         }
     }
 
@@ -1587,16 +1431,6 @@ class TradingViewModel(
         }
     }
 
-    fun syncCloudBackupNow() {
-        viewModelScope.launch {
-            _isSyncingCloud.value = true
-            cloudRepository.updateUserBalanceAndMode(currentBalance(), currentExecutionMode(), markBackupTimestamp = true)
-                .onSuccess { _snackbarMessage.value = "สำรองข้อมูลกลยุทธ์และประวัติขึ้น Cloud Firestore สำเร็จ" }
-                .onFailure { _snackbarMessage.value = "สำรองข้อมูลไม่สำเร็จ: ${it.localizedMessage}" }
-            _isSyncingCloud.value = false
-        }
-    }
-
     private fun dispatchAlerts(
         isSignal: Boolean = false,
         isTradeResult: Boolean = false,
@@ -1629,9 +1463,14 @@ class TradingViewModel(
 
     private suspend fun updateProfileAndDailySummary(pnl: Double, won: Boolean) {
         val updatedBal = (currentBalance() + pnl).coerceAtLeast(0.0)
-        cloudRepository.updateUserBalanceAndMode(updatedBal, currentExecutionMode(), markBackupTimestamp = true)
+        localRepository.updateUserBalanceAndMode(
+            userId = currentUserId,
+            newBalance = updatedBal,
+            mode = currentExecutionMode(),
+            markSavedTimestamp = true
+        )
 
-        val dateKey = cloudRepository.todayDateKey()
+        val dateKey = localRepository.todayDateKey()
         val existing = todaySummary()
         val newNetPnl = (existing?.netPnl ?: 0.0) + pnl
         val currentDrawdown = if (newNetPnl < 0) -newNetPnl else 0.0
@@ -1646,8 +1485,7 @@ class TradingViewModel(
             consecutiveLosses = if (won) 0 else (existing?.consecutiveLosses ?: 0) + 1,
             peakDrawdown = maxOf(existing?.peakDrawdown ?: 0.0, currentDrawdown)
         )
-        cloudRepository.upsertDailySummary(summary)
-            .onFailure { syncQueueManager.enqueueDailySummary(summary) }
+        localRepository.upsertDailySummary(summary)
     }
 
     private fun finishPipeline(stage: ExecutionStage, message: String) {
@@ -1657,56 +1495,32 @@ class TradingViewModel(
         _snackbarMessage.value = message
     }
 
-    private suspend fun cacheCandlesToRoom(instrument: String, timeframe: String, candles: List<Candle>) {
-        withContext(Dispatchers.IO) {
-            tradingDao.clearCandles(instrument, timeframe)
-            tradingDao.insertCandles(
-                candles.map {
-                    CachedCandleEntity(
-                        instrument = instrument,
-                        timeframe = timeframe,
-                        timestampMillis = it.timestampMillis,
-                        open = it.open,
-                        high = it.high,
-                        low = it.low,
-                        close = it.close,
-                        volume = it.volume
-                    )
-                }
-            )
-        }
-    }
-
     private fun activeStrategy(): StrategyConfig {
-        val list = (strategiesState.value as? CloudUiState.Success)?.data.orEmpty()
+        val list = (strategiesState.value as? LocalUiState.Success)?.data.orEmpty()
         return list.firstOrNull { it.active } ?: list.firstOrNull() ?: StrategyConfig(userId = currentUserId)
     }
 
     private fun currentRiskPolicy(): RiskPolicy =
-        (riskPolicyState.value as? CloudUiState.Success)?.data ?: RiskPolicy(userId = currentUserId)
+        (riskPolicyState.value as? LocalUiState.Success)?.data ?: RiskPolicy(userId = currentUserId)
 
     private fun currentTrades(): List<TradeRecord> =
-        (tradesState.value as? CloudUiState.Success)?.data.orEmpty()
+        (tradesState.value as? LocalUiState.Success)?.data.orEmpty()
 
     private fun todaySummary(): DailyPnLSummary? {
-        val key = cloudRepository.todayDateKey()
-        return (dailySummariesState.value as? CloudUiState.Success)?.data.orEmpty().firstOrNull { it.dateKey == key }
+        val key = localRepository.todayDateKey()
+        return (dailySummariesState.value as? LocalUiState.Success)?.data.orEmpty().firstOrNull { it.dateKey == key }
     }
 
     private fun currentBalance(): Double =
-        (profileState.value as? CloudUiState.Success)?.data?.simulationBalance ?: 10000.0
+        (profileState.value as? LocalUiState.Success)?.data?.simulationBalance ?: 10000.0
 
     private fun currentExecutionMode(): ExecutionMode =
-        ExecutionMode.safeValueOf((profileState.value as? CloudUiState.Success)?.data?.executionMode)
+        ExecutionMode.safeValueOf((profileState.value as? LocalUiState.Success)?.data?.executionMode)
 
-    private fun unwrapFirestoreError(error: Throwable, fallback: String): String {
-        val firestoreError = generateSequence(error) { it.cause }
-            .filterIsInstance<FirebaseFirestoreException>()
-            .firstOrNull()
-        if (firestoreError == null && error is CancellationException) throw error
-        val rootError = firestoreError ?: error
-        Log.w(TAG, "Stream error", rootError)
-        return rootError.localizedMessage ?: fallback
+    private fun unwrapSqlError(error: Throwable, fallback: String): String {
+        if (error is CancellationException) throw error
+        Log.w(TAG, "Local SQLite stream error", error)
+        return error.localizedMessage ?: fallback
     }
 
     private fun format2(value: Double): String = String.format("%.2f", value)

@@ -6,10 +6,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.core.app.ApplicationProvider
 import com.example.ui.AppNavigation
 import com.example.ui.theme.IQTradingTheme
-import com.google.firebase.FirebaseApp
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -31,36 +28,13 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `firebase bootstrap handles initialization safely without throwing`() {
-    val context = ApplicationProvider.getApplicationContext<Context>()
-    val hasGoogleAppId = context.resources.getIdentifier(
-      "google_app_id",
-      "string",
-      context.packageName
-    ) != 0
-    val initialized = FirebaseBootstrap.ensureInitialized(context)
-    assertEquals(hasGoogleAppId, initialized)
-    if (hasGoogleAppId) {
-      assertTrue(FirebaseApp.getApps(context).isNotEmpty())
-      assertNotNull(FirebaseBootstrap.getAuthOrNull(context))
-    }
-  }
-
-  @Test
-  fun `app navigation renders without IllegalStateException`() {
-    val context = ApplicationProvider.getApplicationContext<Context>()
-    val initialized = FirebaseBootstrap.ensureInitialized(context)
+  fun `app navigation boots directly into local sqlite terminal`() {
     composeTestRule.setContent {
       IQTradingTheme {
         AppNavigation()
       }
     }
     composeTestRule.waitForIdle()
-    val expectedTag = if (initialized) {
-      "google_sign_in_button"
-    } else {
-      "firebase_config_missing_screen"
-    }
-    composeTestRule.onNodeWithTag(expectedTag).assertExists()
+    composeTestRule.onNodeWithTag("nav_terminal").assertExists()
   }
 }

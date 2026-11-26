@@ -22,16 +22,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
-import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Router
+import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -57,17 +56,19 @@ import androidx.core.content.ContextCompat
 import com.example.model.BackendHealthState
 import com.example.model.ExecutionMode
 import com.example.model.IntegrationSettings
+import com.example.model.LocalDatabaseStats
 import com.example.model.UserProfile
 import com.example.ui.theme.LocalTradingColors
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 @Composable
 fun SettingsDocsScreen(
     userProfile: UserProfile?,
+    databaseStats: LocalDatabaseStats,
     settings: IntegrationSettings,
     backendHealth: BackendHealthState,
-    isSyncingCloud: Boolean,
     onSwitchMode: (ExecutionMode) -> Unit,
     onResetBalance: () -> Unit,
     onSaveIntegrations: (
@@ -85,13 +86,15 @@ fun SettingsDocsScreen(
     onTestBackend: () -> Unit,
     onSendTelegramTest: () -> Unit,
     onSendLocalNotificationTest: () -> Unit,
-    onSyncCloudNow: () -> Unit,
-    onSignOut: () -> Unit,
+    onUpdateTraderName: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
     val context = LocalContext.current
     val currentMode = ExecutionMode.safeValueOf(userProfile?.executionMode)
+    var traderNameInput by remember(userProfile?.displayName) {
+        mutableStateOf(userProfile?.displayName ?: "Local Trader")
+    }
 
     var hasNotifPermission by remember {
         mutableStateOf(
@@ -353,17 +356,19 @@ fun SettingsDocsScreen(
             }
         }
 
-        // 3. Cloud Backup & Google Account
+        // 3. Local SQLite Storage & Trader Profile
         item {
-            val lastBackupStr = userProfile?.lastBackupAt?.toDate()?.let {
-                SimpleDateFormat("dd MMM yyyy HH:mm", Locale.getDefault()).format(it)
-            } ?: "ซิงค์อัตโนมัติพร้อมใช้งาน"
+            val lastSavedStr = databaseStats.lastSavedAtMillis?.let {
+                SimpleDateFormat("dd MMM yyyy HH:mm:ss", Locale.getDefault()).format(Date(it))
+            } ?: "บันทึกลง SQLite บนเครื่องอัตโนมัติ"
 
             Surface(
                 color = tradingColors.surfaceElevated,
                 shape = RoundedCornerShape(16.dp),
                 border = BorderStroke(1.dp, tradingColors.cardBorder),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("local_sqlite_storage_card")
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
@@ -373,56 +378,52 @@ fun SettingsDocsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Rounded.CloudSync, contentDescription = null, tint = tradingColors.cyan)
+                        Icon(Icons.Rounded.Storage, contentDescription = "Local SQLite Database", tint = tradingColors.cyan)
                         Text(
-                            text = "ระบบสำรองข้อมูล Cloud Firestore & บัญชี",
+                            text = "ฐานข้อมูล SQL on Local (Room SQLite)",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     Text(
-                        text = "บัญชี: ${userProfile?.displayName ?: "Trader"} (${userProfile?.email ?: "Google Auth"})",
+                        text = "ไฟล์ฐานข้อมูล: ${databaseStats.databaseName} (Local-First ไม่มี Cloud Sync)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = tradingColors.cyan
+                    )
+                    Text(
+                        text = "ข้อมูลบนเครื่อง: ประวัติเทรด ${databaseStats.totalTrades} ไม้ • แท่งเทียน ${databaseStats.totalCachedCandles} แท่ง • กลยุทธ์ ${databaseStats.totalStrategies} ชุด • สรุปรายวัน ${databaseStats.totalDailySummaries} วัน",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "สำรองข้อมูลล่าสุด: $lastBackupStr",
+                        text = "บันทึกล่าสุด: $lastSavedStr",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    OutlinedTextField(
+                        value = traderNameInput,
+                        onValueChange = { traderNameInput = it },
+                        label = { Text("ชื่อโปรไฟล์ Trader บนเครื่อง (Local SQLite)") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("local_trader_name_input")
+                    )
+
+                    Button(
+                        onClick = { onUpdateTraderName(traderNameInput) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = tradingColors.cyan,
+                            contentColor = tradingColors.surfaceCanvas
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("save_local_profile_button")
                     ) {
-                        Button(
-                            onClick = onSyncCloudNow,
-                            enabled = !isSyncingCloud,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = tradingColors.cyan,
-                                contentColor = tradingColors.surfaceCanvas
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).height(48.dp).testTag("cloud_backup_now_button")
-                        ) {
-                            if (isSyncingCloud) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    color = tradingColors.surfaceCanvas,
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Text("Backup Now", fontWeight = FontWeight.Bold)
-                            }
-                        }
-                        OutlinedButton(
-                            onClick = onSignOut,
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, tradingColors.bearish.copy(alpha = 0.6f)),
-                            modifier = Modifier.weight(1f).height(48.dp).testTag("sign_out_button")
-                        ) {
-                            Text("ออกจากระบบ", color = tradingColors.bearish)
-                        }
+                        Text("บันทึกโปรไฟล์ลง SQLite", fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -458,7 +459,7 @@ fun SettingsDocsScreen(
                     )
                     DocAccordionItem(
                         title = "2. การอ่านสัญญาณ AI และตัวชี้วัดเทคนิค",
-                        body = "ระบบคำนวณ RSI (Wilder), MACD (12/26/9), EMA Fast/Slow, Bollinger Bands และ ATR เพื่อจำแนก Market Regime พร้อมแยกแสดง Model Confidence ออกจาก Calibrated Win Probability และสามารถแนะนำ NO TRADE เมื่อสัญญาณขัดแย้งหรือตลาดผันผวนเกินเกณฑ์"
+                        body = "ระบบคำนวณ RSI (Wilder), MACD (12/26/9), EMA Fast/Slow, Bollinger Bands, ADX, Stochastic และ VWAP เพื่อจำแนก Market Regime พร้อมแยกแสดง Model Confidence ออกจาก Calibrated Win Probability และแนะนำ NO TRADE เมื่อสัญญาณขัดแย้งหรือตลาดผันผวนเกินเกณฑ์"
                     )
                     DocAccordionItem(
                         title = "3. ระบบ Risk Management และจุดตัดขาดทุนอัตโนมัติ",
@@ -469,8 +470,8 @@ fun SettingsDocsScreen(
                         body = "1) ค้นหา @BotFather ใน Telegram และสร้างบอทด้วยคำสั่ง /newbot เพื่อรับ Bot Token\n2) ส่งข้อความทักบอทของคุณ จากนั้นนำ Chat ID มาใส่ในหน้านี้\n3) Token จะถูกเข้ารหัสด้วย Android Keystore AES-256-GCM บนเครื่องของคุณเท่านั้น"
                     )
                     DocAccordionItem(
-                        title = "5. การสำรองข้อมูล Cloud และสิทธิ์ผู้ใช้",
-                        body = "กลยุทธ์ นโยบายความเสี่ยง ประวัติการเทรด และสรุปผลรายวันจะถูกซิงค์ไปยัง Cloud Firestore ภายใต้โครงสร้าง /users/{userId}/... ซึ่งล็อกสิทธิ์เฉพาะบัญชี Google ที่ยืนยันตัวตนเท่านั้น"
+                        title = "5. ระบบจัดเก็บข้อมูล SQL on Local (Room SQLite)",
+                        body = "ข้อมูลโปรไฟล์ กลยุทธ์ นโยบายความเสี่ยง ประวัติการเทรด สรุป P&L รายวัน และแคชแท่งเทียนถูกจัดเก็บโดยตรงในฐานข้อมูล Room SQLite บนอุปกรณ์ของคุณ (iq_trading_local_cache.db) โดยไม่ต้องพึ่งระบบ Cloud Sync หรือการเข้าสู่ระบบผ่านคลาวด์"
                     )
                 }
             }

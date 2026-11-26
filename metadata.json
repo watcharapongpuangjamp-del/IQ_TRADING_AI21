@@ -1,6 +1,6 @@
 {
   "name": "IQ Trading AI",
-  "description": "Hybrid Android trading intelligence terminal with real-time technical analysis, automated risk management, daily P&L dashboard, Telegram alerts, and cloud backup.",
+  "description": "Hybrid Android trading intelligence terminal with real-time technical analysis, automated risk management, daily P&L dashboard, Telegram alerts, and local SQLite persistence.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1,24 +1,15 @@
 package com.example.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
@@ -28,9 +19,6 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Analytics
 import androidx.compose.material.icons.rounded.CandlestickChart
 import androidx.compose.material.icons.rounded.Tune
-import androidx.compose.material.icons.rounded.WarningAmber
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -47,19 +35,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -70,28 +51,21 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.example.FirebaseBootstrap
-import com.example.R
 import com.example.data.local.TradingDatabase
 import com.example.data.remote.BackendConnectorClient
 import com.example.data.remote.TelegramNotifier
-import com.example.data.repository.TradingCloudRepository
+import com.example.data.repository.LocalTradingRepository
 import com.example.model.RiskPolicy
 import com.example.model.StrategyConfig
 import com.example.security.SecureCredentialVault
-import com.example.ui.auth.AuthScreen
-import com.example.ui.auth.authStateFlow
-import com.example.ui.auth.signOutUser
 import com.example.ui.notifications.TradingNotificationHelper
 import com.example.ui.screens.PnLDashboardScreen
 import com.example.ui.screens.SettingsDocsScreen
 import com.example.ui.screens.StrategyRiskScreen
 import com.example.ui.screens.TerminalScreen
 import com.example.ui.theme.LocalTradingColors
-import com.example.viewmodel.CloudUiState
+import com.example.viewmodel.LocalUiState
 import com.example.viewmodel.TradingViewModel
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FirebaseFirestore
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -143,114 +117,17 @@ private val NAV_ITEMS = listOf(
 )
 
 @Composable
-fun AppNavigation(auth: FirebaseAuth? = null) {
-    val context = LocalContext.current
-    var initAttempt by remember { mutableIntStateOf(0) }
-    val resolvedAuth = remember(auth, context, initAttempt) {
-        auth ?: FirebaseBootstrap.getAuthOrNull(context)
-    }
-
-    if (resolvedAuth == null) {
-        FirebaseConfigMissingScreen(
-            onRetry = { initAttempt++ }
-        )
-        return
-    }
-
-    val currentUser by resolvedAuth.authStateFlow()
-        .collectAsStateWithLifecycle(initialValue = resolvedAuth.currentUser)
-    val user = currentUser
-
-    if (user == null) {
-        AuthScreen(onAuthSuccess = { /* authStateFlow updates automatically */ })
-    } else {
-        key(user.uid) {
-            AuthenticatedTradingShell(
-                currentUserId = user.uid,
-                displayName = user.displayName ?: "Trader",
-                email = user.email
-            )
-        }
-    }
+fun AppNavigation(localUserId: String = "local_trader") {
+    LocalTradingShell(
+        currentUserId = localUserId,
+        displayName = "Local Trader"
+    )
 }
 
 @Composable
-private fun FirebaseConfigMissingScreen(onRetry: () -> Unit) {
-    val tradingColors = LocalTradingColors.current
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(tradingColors.surfaceCanvas)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .padding(24.dp)
-            .testTag("firebase_config_missing_screen"),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            color = tradingColors.surfaceElevated,
-            shape = RoundedCornerShape(18.dp),
-            border = BorderStroke(1.dp, tradingColors.warning.copy(alpha = 0.5f)),
-            modifier = Modifier.widthIn(max = 520.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.WarningAmber,
-                        contentDescription = "Firebase configuration missing",
-                        tint = tradingColors.warning,
-                        modifier = Modifier.size(28.dp)
-                    )
-                    Text(
-                        text = "ยังไม่ได้ตั้งค่า Firebase ในไฟล์ APK",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                Text(
-                    text = "ไม่พบข้อมูลทรัพยากรจาก app/google-services.json ในบิลด์นี้ (เช่น บิลด์ผ่าน GitHub Actions โดยยังไม่ได้เพิ่ม Secret ชื่อ GOOGLE_SERVICES_JSON) จึงไม่สามารถเริ่มต้น FirebaseApp ได้",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "วิธีแก้ไข:\n1) ไปที่ GitHub Repository → Settings → Secrets and variables → Actions\n2) เพิ่ม Secret ชื่อ GOOGLE_SERVICES_JSON โดยใส่เนื้อหาจากไฟล์ app/google-services.json\n3) สั่งรัน Workflow Build APK ใหม่อีกครั้ง แล้วติดตั้ง APK ล่าสุด",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Button(
-                    onClick = onRetry,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = tradingColors.bullish,
-                        contentColor = tradingColors.surfaceCanvas
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("retry_firebase_init_button")
-                ) {
-                    Text(
-                        text = "ลองตรวจสอบการตั้งค่าอีกครั้ง",
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AuthenticatedTradingShell(
+private fun LocalTradingShell(
     currentUserId: String,
-    displayName: String,
-    email: String?
+    displayName: String
 ) {
     val viewModel: TradingViewModel = viewModel(
         key = currentUserId,
@@ -259,31 +136,27 @@ private fun AuthenticatedTradingShell(
                 val app = checkNotNull(this[APPLICATION_KEY]) {
                     "APPLICATION_KEY missing from CreationExtras"
                 }
-                val databaseId = app.getString(R.string.firestore_database_id)
-                val db = FirebaseFirestore.getInstance(databaseId)
+                val dao = TradingDatabase.getInstance(app).tradingDao()
                 TradingViewModel(
-                    cloudRepository = TradingCloudRepository(db),
-                    tradingDao = TradingDatabase.getInstance(app).tradingDao(),
+                    localRepository = LocalTradingRepository(dao),
                     credentialVault = SecureCredentialVault(app),
                     telegramNotifier = TelegramNotifier(),
                     backendClient = BackendConnectorClient(),
                     notificationHelper = TradingNotificationHelper(app),
                     currentUserId = currentUserId,
                     userDisplayName = displayName,
-                    userEmail = email
+                    userEmail = null
                 )
             }
         }
     )
 
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val credentialManager = remember(context) { CredentialManager.create(context) }
     val tradingColors = LocalTradingColors.current
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
 
     val terminalState by viewModel.terminalState.collectAsStateWithLifecycle()
+    val databaseStats by viewModel.databaseStats.collectAsStateWithLifecycle()
     val profileState by viewModel.profileState.collectAsStateWithLifecycle()
     val strategiesState by viewModel.strategiesState.collectAsStateWithLifecycle()
     val riskPolicyState by viewModel.riskPolicyState.collectAsStateWithLifecycle()
@@ -292,7 +165,6 @@ private fun AuthenticatedTradingShell(
     val integrationSettings by viewModel.integrationSettings.collectAsStateWithLifecycle()
     val backendHealth by viewModel.backendHealth.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
-    val isSyncingCloud by viewModel.isSyncingCloud.collectAsStateWithLifecycle()
     val mlModels by viewModel.mlModels.collectAsStateWithLifecycle()
     val activeMlModel by viewModel.activeMlModel.collectAsStateWithLifecycle()
     val isMlBusy by viewModel.isMlBusy.collectAsStateWithLifecycle()
@@ -307,19 +179,19 @@ private fun AuthenticatedTradingShell(
         }
     }
 
-    val userProfile = (profileState as? CloudUiState.Success)?.data
-    val strategies = (strategiesState as? CloudUiState.Success)?.data.orEmpty()
+    val userProfile = (profileState as? LocalUiState.Success)?.data
+    val strategies = (strategiesState as? LocalUiState.Success)?.data.orEmpty()
     val activeStrategy = strategies.firstOrNull { it.active }
         ?: strategies.firstOrNull()
         ?: StrategyConfig(userId = currentUserId)
-    val riskPolicy = (riskPolicyState as? CloudUiState.Success)?.data
+    val riskPolicy = (riskPolicyState as? LocalUiState.Success)?.data
         ?: RiskPolicy(userId = currentUserId)
-    val trades = (tradesState as? CloudUiState.Success)?.data.orEmpty()
-    val dailySummaries = (dailySummariesState as? CloudUiState.Success)?.data.orEmpty()
+    val trades = (tradesState as? LocalUiState.Success)?.data.orEmpty()
+    val dailySummaries = (dailySummariesState as? LocalUiState.Success)?.data.orEmpty()
     val todayDateKey = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) }
 
-    val cloudError = listOf(profileState, strategiesState, riskPolicyState, tradesState)
-        .filterIsInstance<CloudUiState.Error>()
+    val localDbError = listOf(profileState, strategiesState, riskPolicyState, tradesState)
+        .filterIsInstance<LocalUiState.Error>()
         .firstOrNull()?.message
 
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -441,8 +313,7 @@ private fun AuthenticatedTradingShell(
                                 onStepReplay = viewModel::stepReplay,
                                 onResetReplay = viewModel::resetReplay,
                                 onExitReplay = viewModel::exitReplayMode,
-                                onReconcileOrders = { viewModel.reconcileBackendOrders() },
-                                onFlushSyncQueue = { viewModel.flushOfflineSyncQueue(forceRetryFailed = true, notifyUser = true) }
+                                onReconcileOrders = { viewModel.reconcileBackendOrders() }
                             )
                         }
                         composable(NavRoutes.STRATEGY) {
@@ -483,24 +354,21 @@ private fun AuthenticatedTradingShell(
                         composable(NavRoutes.SETTINGS_DOCS) {
                             SettingsDocsScreen(
                                 userProfile = userProfile,
+                                databaseStats = databaseStats,
                                 settings = integrationSettings,
                                 backendHealth = backendHealth,
-                                isSyncingCloud = isSyncingCloud,
                                 onSwitchMode = viewModel::switchExecutionMode,
                                 onResetBalance = viewModel::resetSimulationBalance,
                                 onSaveIntegrations = viewModel::saveIntegrationsAndTestBackend,
                                 onTestBackend = viewModel::testBackendConnection,
                                 onSendTelegramTest = viewModel::sendTelegramTest,
                                 onSendLocalNotificationTest = viewModel::sendLocalNotificationTest,
-                                onSyncCloudNow = viewModel::syncCloudBackupNow,
-                                onSignOut = {
-                                    signOutUser(credentialManager, scope)
-                                }
+                                onUpdateTraderName = viewModel::updateLocalTraderName
                             )
                         }
                     }
 
-                    if (!cloudError.isNullOrBlank()) {
+                    if (!localDbError.isNullOrBlank()) {
                         Surface(
                             color = tradingColors.bearishContainer,
                             modifier = Modifier
@@ -509,7 +377,7 @@ private fun AuthenticatedTradingShell(
                                 .padding(12.dp)
                         ) {
                             Text(
-                                text = "Cloud Sync: $cloudError",
+                                text = "Local SQLite Error: $localDbError",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = tradingColors.bearish,
                                 modifier = Modifier.padding(10.dp)

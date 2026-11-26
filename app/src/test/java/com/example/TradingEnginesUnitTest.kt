@@ -11,6 +11,7 @@ import com.example.model.StrategyConfig
 import com.example.model.TradeDirection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -222,9 +223,9 @@ class TradingEnginesUnitTest {
         assertEquals(com.example.model.AlignmentState.CONFLICTING, com.example.model.AlignmentState.safeValueOf("CONFLICTING"))
         assertEquals(com.example.model.AlignmentState.CONFLICTING, com.example.model.AlignmentState.safeValueOf("CONFLICT"))
 
-        assertEquals("OPEN", com.example.model.TradeStatus.toFirestoreStatus("PENDING"))
-        assertEquals("OPEN", com.example.model.TradeStatus.toFirestoreStatus("UNKNOWN"))
-        assertEquals("CANCELLED", com.example.model.TradeStatus.toFirestoreStatus("FAILED"))
+        assertEquals("OPEN", com.example.model.TradeStatus.toNormalizedStatus("PENDING"))
+        assertEquals("OPEN", com.example.model.TradeStatus.toNormalizedStatus("UNKNOWN"))
+        assertEquals("CANCELLED", com.example.model.TradeStatus.toNormalizedStatus("FAILED"))
 
         val client = com.example.data.remote.BackendConnectorClient()
         val orderJson = """
@@ -333,20 +334,35 @@ class TradingEnginesUnitTest {
     }
 
     @Test
-    fun phase6_offlineSyncQueueBackoff_andMultiChannelWsHelpers() {
-        val baseTime = 1_700_000_000_000L
-        assertEquals(
-            baseTime + 2_000L,
-            com.example.data.local.OfflineSyncQueueManager.computeNextRetryMillis(baseTime, 1)
+    fun phase6_localSqlRepositoryEntities_andMultiChannelWsHelpers() = kotlinx.coroutines.test.runTest {
+        val fakeDao = InMemoryTradingDao()
+        val repo = com.example.data.repository.LocalTradingRepository(fakeDao)
+
+        val boot = repo.ensureUserBootstrap("local_trader", "Quant Local")
+        assertTrue(boot.isSuccess)
+        assertNotNull(fakeDao.getUserProfileOnce("local_trader"))
+        assertNotNull(fakeDao.getRiskPolicyOnce("local_trader"))
+        assertEquals(1, fakeDao.getStrategiesOnce("local_trader").size)
+
+        val tradeRes = repo.createTrade(
+            com.example.model.TradeRecord(
+                id = "sql_test_1",
+                userId = "local_trader",
+                instrument = "EUR/USD",
+                timeframe = "1m",
+                direction = "CALL",
+                mode = "SIMULATION",
+                amount = 25.0,
+                payoutRate = 0.85,
+                entryPrice = 1.0850,
+                status = "OPEN"
+            )
         )
-        assertEquals(
-            baseTime + 4_000L,
-            com.example.data.local.OfflineSyncQueueManager.computeNextRetryMillis(baseTime, 2)
-        )
-        assertEquals(
-            baseTime + 300_000L,
-            com.example.data.local.OfflineSyncQueueManager.computeNextRetryMillis(baseTime, 10)
-        )
+        assertEquals("sql_test_1", tradeRes.getOrNull())
+        assertTrue(repo.settleTrade("sql_test_1", 1.0860, com.example.model.TradeStatus.WON, 21.25).isSuccess)
+        val stored = fakeDao.trades["sql_test_1"]
+        assertEquals("WON", stored?.status)
+        assertEquals(21.25, stored?.pnl ?: 0.0, 1e-6)
 
         val client = com.example.data.remote.BackendConnectorClient()
         assertEquals(
@@ -500,4 +516,73 @@ class TradingEnginesUnitTest {
         assertEquals(0.82, parsedSysDrift?.active_model_drift_score ?: 0.0, 1e-6)
     }
 }
+
+private class InMemoryTradingDao : com.example.data.local.TradingDao {
+    private val profiles = mutableMapOf<String, com.example.data.local.LocalUserProfileEntity>()
+    private val strategies = mutableMapOf<String, com.example.data.local.LocalStrategyConfigEntity>()
+    private val policies = mutableMapOf<String, com.example.data.local.LocalRiskPolicyEntity>()
+    val trades = mutableMapOf<String, com.example.data.local.LocalTradeCacheEntity>()
+    private val summaries = mutableMapOf<String, com.example.data.local.LocalDailySummaryEntity>()
+    private val candles = mutableListOf<com.example.data.local.CachedCandleEntity>()
+
+    override fun observeCandles(instrument: String, timeframe: String) =
+        kotlinx.coroutines.flow.flowOf(candles.filter { it.instrument == instrument && it.timeframe == timeframe })
+
+    override fun observeCandleCount() = kotlinx.coroutines.flow.flowOf(candles.size)
+
+    override suspend fun clearCandles(instrument: String, timeframe: String) {
+        candles.removeAll { it.instrument == instrument && it.timeframe == timeframe }
+    }
+
+    override suspend fun insertCandles(candles: List<com.example.data.local.CachedCandleEntity>) {
+        this.candles.addAll(candles)
+    }
+
+    override fun observeUserProfile(userId: String) = kotlinx.coroutines.flow.flowOf(profiles[userId])
+    override suspend fun getUserProfileOnce(userId: String) = profiles[userId]
+    override suspend fun upsertUserProfile(profile: com.example.data.local.LocalUserProfileEntity) {
+        profiles[profile.userId] = profile
+    }
+
+    override fun observeStrategies(userId: String) =
+        kotlinx.coroutines.flow.flowOf(strategies.values.filter { it.userId == userId })
+
+    override suspend fun getStrategiesOnce(userId: String) =
+        strategies.values.filter { it.userId == userId }
+
+    override suspend fun upsertStrategy(strategy: com.example.data.local.LocalStrategyConfigEntity) {
+        strategies[strategy.id] = strategy
+    }
+
+    override fun observeRiskPolicy(userId: String) = kotlinx.coroutines.flow.flowOf(policies[userId])
+    override suspend fun getRiskPolicyOnce(userId: String) = policies[userId]
+    override suspend fun upsertRiskPolicy(policy: com.example.data.local.LocalRiskPolicyEntity) {
+        policies[policy.userId] = policy
+    }
+
+    override fun observeLocalTrades(userId: String) =
+        kotlinx.coroutines.flow.flowOf(trades.values.filter { it.userId == userId })
+
+    override fun observeTradeCount(userId: String) =
+        kotlinx.coroutines.flow.flowOf(trades.values.count { it.userId == userId })
+
+    override suspend fun upsertTrade(trade: com.example.data.local.LocalTradeCacheEntity) {
+        trades[trade.tradeId] = trade
+    }
+
+    override suspend fun updateTradeSettlement(tradeId: String, exitPrice: Double, status: String, pnl: Double) {
+        val current = trades[tradeId] ?: return
+        trades[tradeId] = current.copy(exitPrice = exitPrice, status = status, pnl = pnl)
+    }
+
+    override fun observeDailySummaries(userId: String) =
+        kotlinx.coroutines.flow.flowOf(summaries.values.filter { it.userId == userId })
+
+    override suspend fun getDailySummaryOnce(summaryId: String) = summaries[summaryId]
+
+    override suspend fun upsertDailySummary(summary: com.example.data.local.LocalDailySummaryEntity) {
+        summaries[summary.summaryId] = summary
+    }
+}
+
 

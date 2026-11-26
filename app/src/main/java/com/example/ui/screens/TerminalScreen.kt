@@ -80,7 +80,6 @@ fun TerminalScreen(
     onResetReplay: () -> Unit,
     onExitReplay: () -> Unit,
     onReconcileOrders: () -> Unit = {},
-    onFlushSyncQueue: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
@@ -186,66 +185,7 @@ fun TerminalScreen(
             }
         }
 
-        // 1a. Offline Sync Queue Status Banner
-        val syncStatus = terminalState.offlineSyncStatus
-        if (syncStatus.pendingCount > 0 || syncStatus.failedCount > 0) {
-            item {
-                Surface(
-                    color = tradingColors.cyanContainer,
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, tradingColors.cyan.copy(alpha = 0.55f)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("offline_sync_banner")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Text(
-                                text = "Offline Sync Queue: ค้างซิงค์ ${syncStatus.pendingCount} รายการ" +
-                                    if (syncStatus.failedCount > 0) " (รอตรวจสอบ ${syncStatus.failedCount})" else "",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = tradingColors.cyan
-                            )
-                            Text(
-                                text = syncStatus.lastError ?: "ข้อมูลถูกเก็บใน Room DB แล้ว และจะซิงค์ขึ้น Firestore อัตโนมัติ",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Button(
-                            onClick = onFlushSyncQueue,
-                            enabled = !syncStatus.isFlushing,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = tradingColors.cyan,
-                                contentColor = tradingColors.surfaceCanvas
-                            ),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier
-                                .height(48.dp)
-                                .testTag("flush_sync_queue_button")
-                        ) {
-                            Text(
-                                text = if (syncStatus.isFlushing) "กำลังซิงค์..." else "ซิงค์ทันที",
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // 1b. Unresolved Order Reconciliation Guard Banner
+        // 1a. Unresolved Order Reconciliation Guard Banner
         if (terminalState.unresolvedOrdersCount > 0) {
             item {
                 Surface(
