@@ -127,10 +127,14 @@ interface TradingDao {
     suspend fun upsertRiskPolicy(policy: LocalRiskPolicyEntity)
     @Query("SELECT * FROM local_risk_policies WHERE id = 'default' LIMIT 1")
     fun observeRiskPolicy(): Flow<LocalRiskPolicyEntity?>
+    @Query("SELECT * FROM local_risk_policies WHERE id = 'default' LIMIT 1")
+    suspend fun getRiskPolicy(): LocalRiskPolicyEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertUserProfile(profile: LocalUserProfileEntity)
     @Query("SELECT * FROM local_user_profile WHERE id = 'local' LIMIT 1")
     fun observeUserProfile(): Flow<LocalUserProfileEntity?>
+    @Query("SELECT * FROM local_user_profile WHERE id = 'local' LIMIT 1")
+    suspend fun getUserProfile(): LocalUserProfileEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertDailySummary(summary: LocalDailySummaryEntity)
     @Query("SELECT * FROM local_daily_pnl_summaries WHERE userId = :userId ORDER BY dateKey DESC LIMIT 30")
