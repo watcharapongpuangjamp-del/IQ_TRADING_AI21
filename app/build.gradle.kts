@@ -48,8 +48,10 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-      // AI Studio.
+      // Use a separate package so the local-only test build can be installed alongside an
+      // existing APK signed with a different debug key. Release keeps the original applicationId.
+      applicationIdSuffix = ".localtest"
+      versionNameSuffix = "-localtest"
       signingConfig = signingConfigs.getByName("debugConfig")
     }
   }
