@@ -323,7 +323,7 @@ fun StrategyRiskScreen(
                                     .height(50.dp)
                                     .testTag("save_strategy_button")
                             ) {
-                                Text("บันทึกกลยุทธ์และซิงค์ขึ้น Cloud", fontWeight = FontWeight.Bold)
+                                Text("บันทึกกลยุทธ์ลงเครื่อง", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -417,7 +417,7 @@ fun StrategyRiskScreen(
                                     .height(50.dp)
                                     .testTag("save_risk_policy_button")
                             ) {
-                                Text("บันทึกกฎจุดตัดขาดทุนและซิงค์ Cloud", fontWeight = FontWeight.Bold)
+                                Text("บันทึกกฎ Risk ลงเครื่อง", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
