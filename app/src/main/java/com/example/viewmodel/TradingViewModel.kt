@@ -66,10 +66,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
-sealed interface CloudUiState<out T> {
-    data object Loading : CloudUiState<Nothing>
-    data class Success<T>(val data: T) : CloudUiState<T>
-    data class Error(val message: String) : CloudUiState<Nothing>
+sealed interface LocalDataState<out T> {
+    data object Loading : LocalDataState<Nothing>
+    data class Success<T>(val data: T) : LocalDataState<T>
+    data class Error(val message: String) : LocalDataState<Nothing>
 }
 
 data class TerminalUiState(
@@ -140,35 +140,35 @@ class TradingViewModel(
     val integrationSettings: StateFlow<IntegrationSettings> = credentialVault.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), IntegrationSettings())
 
-    val profileState: StateFlow<CloudUiState<UserProfile?>> =
+    val profileState: StateFlow<LocalDataState<UserProfile?>> =
         localRepository.observeUserProfile(currentUserId)
-            .map<UserProfile?, CloudUiState<UserProfile?>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapDataError(it, "โหลดข้อมูลโปรไฟล์ไม่สำเร็จ"))) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
+            .map<UserProfile?, LocalDataState<UserProfile?>> { LocalDataState.Success(it) }
+            .catch { emit(LocalDataState.Error(unwrapDataError(it, "โหลดข้อมูลโปรไฟล์ไม่สำเร็จ"))) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LocalDataState.Loading)
 
-    val strategiesState: StateFlow<CloudUiState<List<StrategyConfig>>> =
+    val strategiesState: StateFlow<LocalDataState<List<StrategyConfig>>> =
         localRepository.observeStrategies(currentUserId)
-            .map<List<StrategyConfig>, CloudUiState<List<StrategyConfig>>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapDataError(it, "โหลดกลยุทธ์จากฐานข้อมูลในเครื่องไม่สำเร็จ"))) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
+            .map<List<StrategyConfig>, LocalDataState<List<StrategyConfig>>> { LocalDataState.Success(it) }
+            .catch { emit(LocalDataState.Error(unwrapDataError(it, "โหลดกลยุทธ์จากฐานข้อมูลในเครื่องไม่สำเร็จ"))) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LocalDataState.Loading)
 
-    val riskPolicyState: StateFlow<CloudUiState<RiskPolicy?>> =
+    val riskPolicyState: StateFlow<LocalDataState<RiskPolicy?>> =
         localRepository.observeRiskPolicy(currentUserId)
-            .map<RiskPolicy?, CloudUiState<RiskPolicy?>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapDataError(it, "โหลดนโยบายความเสี่ยงไม่สำเร็จ"))) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
+            .map<RiskPolicy?, LocalDataState<RiskPolicy?>> { LocalDataState.Success(it) }
+            .catch { emit(LocalDataState.Error(unwrapDataError(it, "โหลดนโยบายความเสี่ยงไม่สำเร็จ"))) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LocalDataState.Loading)
 
-    val tradesState: StateFlow<CloudUiState<List<TradeRecord>>> =
+    val tradesState: StateFlow<LocalDataState<List<TradeRecord>>> =
         localRepository.observeTrades(currentUserId)
-            .map<List<TradeRecord>, CloudUiState<List<TradeRecord>>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapDataError(it, "โหลดประวัติการเทรดไม่สำเร็จ"))) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
+            .map<List<TradeRecord>, LocalDataState<List<TradeRecord>>> { LocalDataState.Success(it) }
+            .catch { emit(LocalDataState.Error(unwrapDataError(it, "โหลดประวัติการเทรดไม่สำเร็จ"))) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LocalDataState.Loading)
 
-    val dailySummariesState: StateFlow<CloudUiState<List<DailyPnLSummary>>> =
+    val dailySummariesState: StateFlow<LocalDataState<List<DailyPnLSummary>>> =
         localRepository.observeDailySummaries(currentUserId)
-            .map<List<DailyPnLSummary>, CloudUiState<List<DailyPnLSummary>>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapDataError(it, "โหลดสรุปผลรายวันไม่สำเร็จ"))) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
+            .map<List<DailyPnLSummary>, LocalDataState<List<DailyPnLSummary>>> { LocalDataState.Success(it) }
+            .catch { emit(LocalDataState.Error(unwrapDataError(it, "โหลดสรุปผลรายวันไม่สำเร็จ"))) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), LocalDataState.Loading)
 
     private var marketFeedJob: Job? = null
     private var localReplayBuffer: List<Candle> = emptyList()
@@ -1257,7 +1257,7 @@ class TradingViewModel(
                 }
                 .onFailure {
                     syncRiskToBackendIfConnected(updated)
-                    _snackbarMessage.value = "บันทึกลงคิวออฟไลน์แล้ว (รออัพเดต Auto-Trade ขึ้น Cloud)"
+                    _snackbarMessage.value = "บันทึกนโยบาย Risk ลง SQL ไม่สำเร็จ"
                 }
         }
     }
@@ -1303,10 +1303,10 @@ class TradingViewModel(
             }
             localRepository.saveStrategy(strategy)
                 .onSuccess {
-                    _snackbarMessage.value = "บันทึกกลยุทธ์ '${strategy.name}' และซิงค์แล้ว"
+                    _snackbarMessage.value = "บันทึกกลยุทธ์ '${strategy.name}' ลง SQL ในเครื่องแล้ว"
                 }
                 .onFailure {
-                    _snackbarMessage.value = "บันทึกกลยุทธ์ '${strategy.name}' ในคิวออฟไลน์แล้ว (รอซิงค์ Cloud)"
+                    _snackbarMessage.value = "บันทึกกลยุทธ์ SQL ไม่สำเร็จ: ${it.localizedMessage}"
                 }
         }
     }
@@ -1319,7 +1319,7 @@ class TradingViewModel(
                     _snackbarMessage.value = "บันทึกนโยบาย Risk Management แล้ว"
                 }
                 .onFailure {
-                    _snackbarMessage.value = "บันทึกนโยบาย Risk ในคิวออฟไลน์แล้ว (รอซิงค์ Cloud)"
+                    _snackbarMessage.value = "บันทึกนโยบาย Risk ลง SQL ไม่สำเร็จ: ${it.localizedMessage}"
                 }
         }
     }
@@ -1512,26 +1512,26 @@ class TradingViewModel(
     }
 
     private fun activeStrategy(): StrategyConfig {
-        val list = (strategiesState.value as? CloudUiState.Success)?.data.orEmpty()
+        val list = (strategiesState.value as? LocalDataState.Success)?.data.orEmpty()
         return list.firstOrNull { it.active } ?: list.firstOrNull() ?: StrategyConfig(userId = currentUserId)
     }
 
     private fun currentRiskPolicy(): RiskPolicy =
-        (riskPolicyState.value as? CloudUiState.Success)?.data ?: RiskPolicy(userId = currentUserId)
+        (riskPolicyState.value as? LocalDataState.Success)?.data ?: RiskPolicy(userId = currentUserId)
 
     private fun currentTrades(): List<TradeRecord> =
-        (tradesState.value as? CloudUiState.Success)?.data.orEmpty()
+        (tradesState.value as? LocalDataState.Success)?.data.orEmpty()
 
     private fun todaySummary(): DailyPnLSummary? {
         val key = localRepository.todayDateKey()
-        return (dailySummariesState.value as? CloudUiState.Success)?.data.orEmpty().firstOrNull { it.dateKey == key }
+        return (dailySummariesState.value as? LocalDataState.Success)?.data.orEmpty().firstOrNull { it.dateKey == key }
     }
 
     private fun currentBalance(): Double =
-        (profileState.value as? CloudUiState.Success)?.data?.simulationBalance ?: 10000.0
+        (profileState.value as? LocalDataState.Success)?.data?.simulationBalance ?: 10000.0
 
     private fun currentExecutionMode(): ExecutionMode =
-        ExecutionMode.safeValueOf((profileState.value as? CloudUiState.Success)?.data?.executionMode)
+        ExecutionMode.safeValueOf((profileState.value as? LocalDataState.Success)?.data?.executionMode)
 
     private fun unwrapDataError(error: Throwable, fallback: String): String {
         if (error is CancellationException) throw error
