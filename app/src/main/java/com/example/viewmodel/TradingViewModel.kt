@@ -155,19 +155,19 @@ class TradingViewModel(
     val riskPolicyState: StateFlow<CloudUiState<RiskPolicy?>> =
         localRepository.observeRiskPolicy(currentUserId)
             .map<RiskPolicy?, CloudUiState<RiskPolicy?>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapFirestoreError(it, "โหลดนโยบายความเสี่ยงไม่สำเร็จ"))) }
+            .catch { emit(CloudUiState.Error(unwrapDataError(it, "โหลดนโยบายความเสี่ยงไม่สำเร็จ"))) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
 
     val tradesState: StateFlow<CloudUiState<List<TradeRecord>>> =
         localRepository.observeTrades(currentUserId)
             .map<List<TradeRecord>, CloudUiState<List<TradeRecord>>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapFirestoreError(it, "โหลดประวัติการเทรดไม่สำเร็จ"))) }
+            .catch { emit(CloudUiState.Error(unwrapDataError(it, "โหลดประวัติการเทรดไม่สำเร็จ"))) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
 
     val dailySummariesState: StateFlow<CloudUiState<List<DailyPnLSummary>>> =
         localRepository.observeDailySummaries(currentUserId)
             .map<List<DailyPnLSummary>, CloudUiState<List<DailyPnLSummary>>> { CloudUiState.Success(it) }
-            .catch { emit(CloudUiState.Error(unwrapFirestoreError(it, "โหลดสรุปผลรายวันไม่สำเร็จ"))) }
+            .catch { emit(CloudUiState.Error(unwrapDataError(it, "โหลดสรุปผลรายวันไม่สำเร็จ"))) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), CloudUiState.Loading)
 
     private var marketFeedJob: Job? = null
@@ -1533,14 +1533,10 @@ class TradingViewModel(
     private fun currentExecutionMode(): ExecutionMode =
         ExecutionMode.safeValueOf((profileState.value as? CloudUiState.Success)?.data?.executionMode)
 
-    private fun unwrapFirestoreError(error: Throwable, fallback: String): String {
-        val firestoreError = generateSequence(error) { it.cause }
-            .filterIsInstance<FirebaseFirestoreException>()
-            .firstOrNull()
-        if (firestoreError == null && error is CancellationException) throw error
-        val rootError = firestoreError ?: error
-        Log.w(TAG, "Stream error", rootError)
-        return rootError.localizedMessage ?: fallback
+    private fun unwrapDataError(error: Throwable, fallback: String): String {
+        if (error is CancellationException) throw error
+        Log.w(TAG, "Local SQL error", error)
+        return error.localizedMessage ?: fallback
     }
 
     private fun format2(value: Double): String = String.format("%.2f", value)
