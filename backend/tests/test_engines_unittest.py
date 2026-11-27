@@ -886,6 +886,9 @@ class TestPurePythonEngines(unittest.TestCase):
                     for i in range(count)
                 ]
 
+            def get_asset_metadata(self):
+                return {"turbo": {"EURUSD": {"is_open": True, "payout": 0.87}}}
+
         connector = IQOptionBrokerConnector(
             email="practice@example.test", password="local-secret",
             balance_mode="PRACTICE", timeout_seconds=3,
@@ -899,6 +902,7 @@ class TestPurePythonEngines(unittest.TestCase):
                 self.assertEqual(connector.account_mode, "PRACTICE")
                 self.assertFalse(connector.live_authorized)
                 self.assertEqual(await connector.get_balance(), 1234.56)
+                self.assertEqual(await connector.get_payout_rate("EUR/USD", 60), 0.87)
 
                 candles = await connector.get_candles("EUR/USD", "1m", limit=30)
                 self.assertEqual(len(candles), 30)
