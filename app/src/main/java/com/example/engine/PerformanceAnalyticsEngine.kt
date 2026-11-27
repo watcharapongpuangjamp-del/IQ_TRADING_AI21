@@ -29,13 +29,13 @@ object PerformanceAnalyticsEngine {
             it.status == TradeStatus.WON.name || it.status == TradeStatus.LOST.name || it.status == TradeStatus.DRAW.name
         }
         val simTrades = settled.filter {
-            ExecutionMode.safeValueOf(it.mode) == ExecutionMode.SIMULATION
+            it.mode.equals("SIMULATION", ignoreCase = true)
         }
         val liveTrades = settled.filter {
-            ExecutionMode.safeValueOf(it.mode) == ExecutionMode.LIVE
+            it.mode.equals("LIVE", ignoreCase = true)
         }
         val demoTrades = settled.filter {
-            ExecutionMode.safeValueOf(it.mode) == ExecutionMode.DEMO
+            it.mode.equals("DEMO", ignoreCase = true)
         }
         val practiceTrades = settled.filter { it.mode.equals("PRACTICE", ignoreCase = true) }
 
