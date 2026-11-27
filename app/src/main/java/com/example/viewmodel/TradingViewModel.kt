@@ -20,6 +20,7 @@ import com.example.engine.SignalEngine
 import com.example.engine.SystemDiagnosticsRunner
 import com.example.engine.TechnicalAnalysisEngine
 import com.example.model.BackendHealthState
+import com.example.model.AssetCatalogItem
 import com.example.model.BackendOrderSummary
 import com.example.model.BacktestReport
 import com.example.model.BrokerDryRunReport
@@ -98,6 +99,18 @@ data class TerminalUiState(
     val isOrderInFlight: Boolean = false,
     val lastLossTimestampMillis: Long? = null,
     val unresolvedOrdersCount: Int = 0,
+    val accountMode: String = "SIMULATION",
+    val accountDisplayLabel: String = "Simulation",
+    val connectionState: String = "INTERNAL",
+    val sessionVerified: Boolean = false,
+    val operationMode: String = "MANUAL",
+    val learningStatus: String = "IDLE",
+    val trainingStatus: String = "IDLE",
+    val backtestStatus: String = "IDLE",
+    val realAccountLocked: Boolean = true,
+    val assetCatalog: List<AssetCatalogItem> = emptyList(),
+    val unavailableAssetTypes: List<String> = emptyList(),
+    val assetCatalogSource: String = "LOCAL_SIMULATION",
     val isReconciling: Boolean = false,
     val lastOrderCorrelationId: String? = null,
     val lastOrderLifecycleState: OrderLifecycleState? = null,
@@ -1197,7 +1210,44 @@ class TradingViewModel(
 
     private suspend fun refreshBackendExecutionState(baseUrl: String, token: String?) {
         backendClient.fetchTradingState(baseUrl, token).onSuccess { stateDto ->
-            _terminalState.update { it.copy(unresolvedOrdersCount = stateDto.unresolved_orders_count) }
+            _terminalState.update {
+                it.copy(
+                    unresolvedOrdersCount = stateDto.unresolved_orders_count,
+                    accountMode = stateDto.account_mode,
+                    accountDisplayLabel = stateDto.account_display_label,
+                    connectionState = stateDto.connection_state,
+                    sessionVerified = stateDto.session_verified,
+                    operationMode = stateDto.operation_mode,
+                    learningStatus = stateDto.learning_status,
+                    trainingStatus = stateDto.training_status,
+                    backtestStatus = stateDto.backtest_status,
+                    realAccountLocked = stateDto.real_account_locked
+                )
+            }
+        }
+        backendClient.fetchAssetCatalog(baseUrl, token).onSuccess { catalog ->
+            _terminalState.update {
+                it.copy(
+                    assetCatalog = catalog.items.map { item ->
+                        AssetCatalogItem(
+                            productType = item.product_type,
+                            productLabel = item.product_label,
+                            symbol = item.symbol,
+                            displayName = item.display_name,
+                            isOpen = item.is_open,
+                            status = item.status,
+                            payoutRate = item.payout_rate,
+                            payoutPercent = item.payout_percent,
+                            minStake = item.min_stake,
+                            maxStake = item.max_stake,
+                            leverage = item.leverage,
+                            source = item.source
+                        )
+                    },
+                    unavailableAssetTypes = catalog.unavailable_product_types,
+                    assetCatalogSource = catalog.source
+                )
+            }
         }
         backendClient.fetchBackendOrders(baseUrl, token, limit = 30).onSuccess { list ->
             _backendOrders.value = list
