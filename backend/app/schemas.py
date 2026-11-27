@@ -352,6 +352,21 @@ class ModeSwitchRequest(BaseModel):
     explicit_live_confirmation: bool = False
 
 
+class IQOptionConnectRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=254)
+    password: str = Field(..., min_length=1, max_length=512)
+
+
+class IQOptionConnectResponse(BaseModel):
+    connected: bool
+    account_mode: str
+    session_verified: bool
+    balance: float
+    connector: str
+    real_account_locked: bool = True
+    live_authorized: bool = False
+
+
 class TradingStateResponse(BaseModel):
     # Execution/account mode is separate from AI workflow and market product type.
     execution_mode: ExecutionMode
