@@ -491,6 +491,12 @@ fun PnLDashboardScreen(
         } else {
             items(filteredTrades, key = { it.id.ifBlank { "${it.instrument}_${it.entryPrice}_${it.createdAtMillis}" } }) { trade ->
                 val statusEnum = TradeStatus.safeValueOf(trade.status)
+                val accountModeLabel = when (trade.mode.uppercase()) {
+                    "DEMO", "PRACTICE" -> "PRACTICE"
+                    "LIVE", "REAL" -> "REAL (LOCKED)"
+                    "SIMULATION" -> "SIMULATION"
+                    else -> trade.mode.uppercase()
+                }
                 val statusColor = when (statusEnum) {
                     TradeStatus.WON -> tradingColors.bullish
                     TradeStatus.LOST, TradeStatus.REJECTED, TradeStatus.FAILED -> tradingColors.bearish
@@ -521,7 +527,7 @@ fun PnLDashboardScreen(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "${trade.mode} • ${trade.strategyName} • Conf ${trade.confidenceScore}%",
+                                text = "${accountModeLabel} • ${trade.strategyName} • Conf ${trade.confidenceScore}%",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
