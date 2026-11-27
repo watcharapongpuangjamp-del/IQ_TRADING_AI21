@@ -163,7 +163,7 @@ class TradingViewModel(
                 val result = practiceService.executePracticeTrade(asset, direction, amount, expiryMinutes)
                 _lastPracticeTrade.value = result
                 if (result.ok && result.orderId != null && result.pnl != null && result.outcome != null) {
-                    val status = when (result.outcome) { "WIN" -> TradeStatus.WON.name; "LOSS" -> TradeStatus.LOST.name; else -> TradeStatus.CANCELLED.name }
+                    val status = when (result.outcome) { "WIN" -> TradeStatus.WON.name; "LOSS" -> TradeStatus.LOST.name; else -> TradeStatus.DRAW.name }
                     val journal = TradeRecord(
                         id = "iqp_" + result.orderId, userId = currentUserId, instrument = asset, timeframe = "1m",
                         direction = direction, mode = "PRACTICE", amount = amount, payoutRate = 0.0,
