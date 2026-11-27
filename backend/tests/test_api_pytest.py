@@ -81,6 +81,15 @@ def test_health_endpoint_defaults_to_simulation(client: TestClient) -> None:
     assert data["live_authorized"] is False
 
 
+def test_iqoption_practice_login_requires_iqoption_adapter(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/iqoption/connect",
+        json={"email": "practice@example.test", "password": "not-a-real-password"},
+    )
+    assert response.status_code == 409
+    assert "broker_adapter" in response.json()["detail"]
+
+
 def test_state_and_asset_catalog_separate_simulation_from_broker_account(client: TestClient) -> None:
     state = client.get("/api/v1/state")
     assert state.status_code == 200
