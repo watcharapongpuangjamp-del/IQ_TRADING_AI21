@@ -84,7 +84,11 @@ fun TerminalScreen(
 ) {
     val tradingColors = LocalTradingColors.current
     val mode = ExecutionMode.safeValueOf(userProfile?.executionMode)
-    val balance = userProfile?.simulationBalance ?: 10000.0
+    val balance = if (terminalState.accountMode == "PRACTICE" && terminalState.sessionVerified) {
+        terminalState.brokerBalance ?: 0.0
+    } else {
+        userProfile?.simulationBalance ?: 10000.0
+    }
     val instrumentSpec = SUPPORTED_INSTRUMENTS.firstOrNull { it.symbol == terminalState.selectedInstrument }
         ?: SUPPORTED_INSTRUMENTS.first()
 
@@ -181,6 +185,49 @@ fun TerminalScreen(
                             Text("KILL STOP", fontWeight = FontWeight.Bold)
                         }
                     }
+                }
+            }
+        }
+
+        // 1b. Explicit account, operation, AI and research mode labels.
+        item {
+            Surface(
+                color = tradingColors.surfaceElevated,
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, tradingColors.cardBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("สถานะระบบและบัญชี", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Text("ACCOUNT: ${terminalState.accountDisplayLabel} (${terminalState.accountMode})")
+                    Text("EXECUTION: ${mode.label} • REAL: LOCKED")
+                    Text("CONNECTION: ${terminalState.connectionState} • Session verified: ${if (terminalState.sessionVerified) "YES" else "NO"}")
+                    Text("OPERATION: ${terminalState.operationMode} • ${if (terminalState.operationMode == "AUTO") "Auto Trading" else "Manual Trading"}")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(selected = false, onClick = {}, enabled = false, label = { Text("LEARNING: ${terminalState.learningStatus}") })
+                        FilterChip(selected = false, onClick = {}, enabled = false, label = { Text("TRAINING: ${terminalState.trainingStatus}") })
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(
+                            selected = terminalState.replayState?.active == true,
+                            onClick = {},
+                            enabled = false,
+                            label = { Text(if (terminalState.replayState?.active == true) "REPLAY ACTIVE" else "BACKTEST: ${terminalState.backtestStatus}") }
+                        )
+                        FilterChip(selected = false, onClick = {}, enabled = false, label = { Text("REAL: LOCKED") })
+                    }
+                    Text(
+                        text = when (terminalState.accountMode) {
+                            "PRACTICE" -> if (terminalState.sessionVerified) "ยอดเงินด้านบนมาจาก IQ Option Practice โดยตรง" else "ยังยืนยัน Practice Session ไม่สำเร็จ — ห้ามส่งคำสั่ง"
+                            "SIMULATION" -> "ยอดเงินเป็นข้อมูล Simulation ภายใน ไม่ใช่ยอดเงินโบรกเกอร์"
+                            else -> "ไม่สามารถยืนยันประเภทบัญชีได้ — ระบบต้องปิดกั้นคำสั่งซื้อขาย"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -338,6 +385,85 @@ fun TerminalScreen(
                     Text(
                         text = "กลยุทธ์: ${activeStrategy.name}",
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        // 2b. Broker-backed product and asset directory.
+        item {
+            Surface(
+                color = tradingColors.surfaceElevated,
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, tradingColors.cardBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("MARKET & ASSET DIRECTORY", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = "แหล่งข้อมูล: ${terminalState.assetCatalogSource}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (terminalState.assetCatalog.isEmpty()) {
+                        Text(
+                            "ยังไม่มีรายการสินทรัพย์จาก Broker — รายการด้านบนเป็นรายการอ้างอิงของ Simulation เท่านั้น",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        terminalState.assetCatalog.take(60).forEach { asset ->
+                            val statusLabel = when (asset.status) {
+                                "OPEN" -> "OPEN"
+                                "CLOSED" -> "CLOSED"
+                                else -> "UNKNOWN"
+                            }
+                            val statusColor = when (asset.status) {
+                                "OPEN" -> tradingColors.bullish
+                                "CLOSED" -> tradingColors.bearish
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "${asset.productLabel} • ${asset.symbol}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(statusLabel, style = MaterialTheme.typography.labelSmall, color = statusColor)
+                                }
+                                val payoutText = asset.payoutPercent?.let { "Payout ${String.format("%.2f", it)}%" } ?: "Payout N/A"
+                                val stakeText = listOfNotNull(
+                                    asset.minStake?.let { "Min ${String.format("%.2f", it)}" },
+                                    asset.maxStake?.let { "Max ${String.format("%.2f", it)}" },
+                                    asset.leverage?.let { "Leverage ${String.format("%.2f", it)}x" }
+                                ).joinToString(" • ")
+                                Text(
+                                    listOf(payoutText, stakeText).filter { it.isNotBlank() }.joinToString(" • "),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    if (terminalState.unavailableAssetTypes.isNotEmpty()) {
+                        Text(
+                            "ยังไม่พบใน API: ${terminalState.unavailableAssetTypes.joinToString()} — ไม่เปิดให้ส่งคำสั่ง",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        "สถานะ OPEN/CLOSED และ Payout แสดงตามข้อมูลที่ API ส่งกลับเท่านั้น หากไม่มีค่าให้แสดง N/A ไม่ใช้ค่าประมาณแทน",
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
