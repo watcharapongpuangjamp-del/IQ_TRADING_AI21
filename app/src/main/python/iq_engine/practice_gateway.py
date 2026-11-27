@@ -158,6 +158,17 @@ class PracticeReadOnlyGateway:
                 if not self._poisoned:
                     self._state = "DISCONNECTED"
 
+    def force_reconnect(self) -> None:
+        """Close this app's owned session and reset recoverable local gateway state."""
+        with self._lock:
+            if self._poisoned or self._state == "POISONED":
+                raise GatewayError("Session is poisoned; restart the app before retrying.")
+            client = self._client
+            self._client = None
+            if client is not None:
+                self._bounded(client.api.close, "force-reconnect-disconnect")
+            self._state = "DISCONNECTED"
+
     def submit_order(self, *_: Any, **__: Any) -> None:
         raise GatewayError("Order submission is disabled in this read-only integration stage.")
 
