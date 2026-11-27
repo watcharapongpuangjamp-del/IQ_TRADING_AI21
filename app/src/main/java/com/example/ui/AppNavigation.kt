@@ -389,6 +389,7 @@ private fun LocalTradingShell(
                                 onSendLocalNotificationTest = viewModel::sendLocalNotificationTest,
                                 onUpdateTraderName = viewModel::updateLocalTraderName,
                                 savedIqOptionEmail = viewModel.savedIqOptionEmail,
+                                savedIqOptionPassword = viewModel.savedIqOptionPassword,
                                 practiceConnectionState = terminalState.connectionState,
                                 practiceSessionVerified = terminalState.sessionVerified && terminalState.accountMode == "PRACTICE",
                                 practiceBalance = terminalState.brokerBalance,
