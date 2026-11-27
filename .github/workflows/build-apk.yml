@@ -7,6 +7,7 @@ on:
       - master
       - develop
       - feature/on-device-python-engine
+      - feature/practice-login-patch-review
     tags:
       - "v*"
   pull_request:
