@@ -207,6 +207,9 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         state = TradeExecutionEngine.get_or_create_state(db)
         connected_flag = bool(connector.connected)
         verified = bool(getattr(connector, "session_verified", connected_flag))
+        if isinstance(connector, SimulationConnector):
+            # Internal simulation is not a verified broker session.
+            verified = False
         broker_mode = getattr(connector, "account_mode", None)
         if isinstance(connector, IQOptionBrokerConnector):
             broker_mode = broker_mode or "UNVERIFIED"
