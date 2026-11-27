@@ -817,7 +817,7 @@ fun TerminalScreen(
                     ) {
                         Button(
                             onClick = { onManualTrade(TradeDirection.CALL) },
-                            enabled = !terminalState.isOrderInFlight && !riskPolicy.emergencyStopped,
+                            enabled = !terminalState.isOrderInFlight && !riskPolicy.emergencyStopped && (mode != ExecutionMode.DEMO || terminalState.sessionVerified),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = tradingColors.bullish,
                                 contentColor = tradingColors.surfaceCanvas
@@ -830,7 +830,7 @@ fun TerminalScreen(
                         ) {
                             Icon(Icons.Rounded.ArrowUpward, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("SIM CALL", fontWeight = FontWeight.Bold)
+                            Text(if (mode == ExecutionMode.DEMO) "PRACTICE CALL" else "SIM CALL", fontWeight = FontWeight.Bold)
                         }
 
                         Button(
@@ -848,7 +848,7 @@ fun TerminalScreen(
                         ) {
                             Icon(Icons.Rounded.ArrowDownward, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("SIM PUT", fontWeight = FontWeight.Bold)
+                            Text(if (mode == ExecutionMode.DEMO) "PRACTICE PUT" else "SIM PUT", fontWeight = FontWeight.Bold)
                         }
                     }
 
