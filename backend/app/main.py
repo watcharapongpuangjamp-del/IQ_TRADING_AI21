@@ -108,7 +108,8 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             email=settings.iqoption_email,
             password=settings.iqoption_password,
             balance_mode=settings.iqoption_balance_mode,
-            initial_balance=10000.0,
+            initial_balance=0.0,
+            timeout_seconds=settings.broker_timeout_seconds,
         )
     else:
         connector = SimulationConnector(initial_balance=10000.0)
