@@ -56,3 +56,19 @@ cd backend
 PYTHONPATH=. python -m unittest discover -s tests -t . -p "test_engines_unittest.py" -v
 PYTHONPATH=. python -m pytest -v
 ```
+
+## IQ Option Practice Integration (iqair 1.0.0)
+
+The `iqoption` adapter uses the user-supplied `iqair==1.0.0` package. It is intentionally Practice-only:
+
+- Set `BROKER_ADAPTER=iqoption`.
+- Set `IQOPTION_BALANCE_MODE=PRACTICE`.
+- Supply `IQOPTION_EMAIL` and `IQOPTION_PASSWORD` only through the backend's local, git-ignored environment file or deployment secret store. Never commit credentials or paste them into chat.
+- Keep `ALLOW_LIVE_TRADING=false`. The connector's `live_authorized` property is hard-coded false and the execution-mode controller rejects `LIVE` regardless of configuration.
+- Switch the application execution mode to `DEMO` only after the broker session reports a verified `PRACTICE` account. `SIMULATION` remains a separate internal simulator.
+
+The first integration slice replaces the former random/mock IQ Option adapter with broker-backed login, Practice balance verification, broker candles, Turbo/Binary CALL/PUT order submission, broker order identifiers, settlement lookup, and read-only reconciliation. A submission is initially recorded as `PENDING`; the backend must confirm the final result from IQ Option before updating the risk ledger. An uncertain acknowledgement is never blindly resubmitted.
+
+The supplied package also implements Digital Options, Forex margin, Crypto margin, CFD margin, asset metadata, and streaming helpers. Those trading modes require additional order-schema, direction, leverage, margin-risk, close-position, and Android UI contracts before they can safely be enabled through this application's existing CALL/PUT binary-options execution pipeline. They are not advertised as executable capabilities in the current connector. Keep them disabled until their end-to-end tests and reconciliation paths are implemented.
+
+The package is unofficial and talks to an undocumented broker protocol. It can break when IQ Option changes its backend. CI tests use a fake client and never log in or place real broker orders.
