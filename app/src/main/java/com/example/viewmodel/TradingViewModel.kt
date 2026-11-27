@@ -1232,6 +1232,7 @@ class TradingViewModel(
                 it.copy(
                     assetCatalog = catalog.items.map { item ->
                         AssetCatalogItem(
+                            rank = item.rank,
                             productType = item.product_type,
                             productLabel = item.product_label,
                             symbol = item.symbol,
