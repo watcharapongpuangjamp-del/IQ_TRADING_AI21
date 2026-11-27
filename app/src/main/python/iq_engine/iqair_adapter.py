@@ -1,6 +1,6 @@
 """On-device IQAir integration boundary.
-This stage exposes Practice account discovery and balance reads only.
-No order-placement method is exposed to Kotlin.
+Practice account connection and guarded Turbo order execution.
+Only explicitly verified Practice accounts can submit test orders.
 """
 from __future__ import annotations
 import json
@@ -67,9 +67,9 @@ def _get_gateway() -> PracticeReadOnlyGateway:
 def connect_practice_readonly_json(email: str, password: str) -> str:
     try:
         snapshot = _get_gateway().connect_readonly(email, password)
-        payload = {"ok": True, "state": "CONNECTED_READ_ONLY", "accountType": snapshot.account_type,
+        payload = {"ok": True, "state": "CONNECTED_PRACTICE", "accountType": snapshot.account_type,
                    "balance": snapshot.balance, "currency": snapshot.currency, "accountId": snapshot.account_id,
-                   "ordersEnabled": False, "tlsVerification": "ENABLED"}
+                   "ordersEnabled": True, "readOnly": False, "tlsVerification": "ENABLED"}
     except Exception as exc:
         payload = {"ok": False, "state": _GATEWAY.state if _GATEWAY is not None else "ERROR",
                    "error": str(exc)[:240], "ordersEnabled": False}
@@ -96,8 +96,24 @@ def force_reconnect_json() -> str:
                    "remoteSessionsRevoked": False, "ordersEnabled": False}
     return json.dumps(payload, separators=(",", ":"))
 
+
+def submit_practice_order_json(asset: str, direction: str, amount: float, expiry_minutes: int) -> str:
+    """Submit one explicitly Practice-only Turbo order and return broker-confirmed settlement."""
+    try:
+        result = _get_gateway().submit_practice_order(asset, direction, amount, int(expiry_minutes))
+        payload = result
+    except Exception as exc:
+        payload = {
+            "ok": False,
+            "state": _GATEWAY.state if _GATEWAY is not None else "ERROR",
+            "error": str(exc)[:240],
+            "accountType": "PRACTICE",
+            "source": "BROKER_RESPONSE",
+        }
+    return json.dumps(payload, separators=(",", ":"), allow_nan=False)
+
 def adapter_status_json() -> str:
     return json.dumps({"provider": "iqair", "version": "1.0.0",
         "state": _GATEWAY.state if _GATEWAY is not None else "DISCONNECTED",
-        "accountMode": "PRACTICE_ONLY", "readOnly": True, "ordersEnabled": False,
+        "accountMode": "PRACTICE_ONLY", "readOnly": False, "ordersEnabled": True,
         "tlsVerification": "ENABLED"}, separators=(",", ":"))
