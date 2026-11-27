@@ -380,6 +380,7 @@ class TradingStateResponse(BaseModel):
 
 
 class AssetCatalogItemSchema(BaseModel):
+    rank: int = Field(..., ge=1)
     product_type: str
     product_label: str
     symbol: str
