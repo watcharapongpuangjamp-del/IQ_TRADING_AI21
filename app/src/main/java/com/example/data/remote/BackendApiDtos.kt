@@ -443,6 +443,23 @@ data class TradingStateDto(
 )
 
 @JsonClass(generateAdapter = true)
+data class IQOptionConnectRequestDto(
+    val email: String,
+    val password: String
+)
+
+@JsonClass(generateAdapter = true)
+data class IQOptionConnectResponseDto(
+    val connected: Boolean = false,
+    val account_mode: String = "DISCONNECTED",
+    val session_verified: Boolean = false,
+    val balance: Double = 0.0,
+    val connector: String = "",
+    val real_account_locked: Boolean = true,
+    val live_authorized: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
 data class AssetCatalogItemDto(
     val rank: Int = 0,
     val product_type: String = "UNKNOWN",
