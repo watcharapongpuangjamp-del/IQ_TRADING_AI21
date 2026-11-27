@@ -42,6 +42,7 @@ from app.ml.trainer import ModelTrainer, ValidationGatePolicy
 from app.models import LatencySampleModel, ModelRegistryModel, OrderRecordModel, RiskPolicyModel, TradingStateModel
 from app.repositories.historical_candles import HistoricalCandleRepository
 from app.schemas import (
+    AssetCatalogResponse,
     BacktestRunRequest,
     BacktestRunResponse,
     BrokerDryRunRequest,
@@ -228,6 +229,33 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             "measurement_source": "broker_session_and_account_profile",
             "note": "IQ Option Practice account is verified; REAL account selection and execution are locked." if isinstance(connector, IQOptionBrokerConnector) and verified else "Broker connection/account mode is not verified.",
         }
+
+    @application.get(
+        "/api/v1/assets/catalog",
+        response_model=AssetCatalogResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Market Assets"],
+    )
+    async def get_asset_catalog() -> AssetCatalogResponse:
+        catalog_reader = getattr(connector, "get_asset_catalog", None)
+        if not callable(catalog_reader):
+            return AssetCatalogResponse(
+                account_mode="SIMULATION" if isinstance(connector, SimulationConnector) else "UNSUPPORTED",
+                connector=connector.name,
+                source="NO_BROKER_ASSET_DIRECTORY",
+                supported_product_types=["SIMULATION"] if isinstance(connector, SimulationConnector) else [],
+                unavailable_product_types=["BLITZ", "BINARY", "DIGITAL", "FUTURES", "FOREX", "CRYPTO", "CFD"],
+                items=[],
+                fetched_at=int(time.time() * 1000),
+            )
+        try:
+            data = await catalog_reader()
+            return AssetCatalogResponse(**data)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Asset directory unavailable: {exc}",
+            ) from exc
 
     @application.get(
         "/api/v1/latency/summary",
@@ -865,11 +893,42 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         summary = TradeExecutionEngine.get_or_create_daily_summary(db)
         balance = await connector.get_balance()
         win_rate = round((summary.wins / summary.total_trades) * 100.0, 2) if summary.total_trades > 0 else 0.0
+        execution_mode = ExecutionMode(state.execution_mode)
+        session_verified = bool(getattr(connector, "session_verified", False))
+        if isinstance(connector, SimulationConnector):
+            account_mode = "SIMULATION"
+            connection_state = "INTERNAL"
+        elif isinstance(connector, IQOptionBrokerConnector):
+            account_mode = "PRACTICE" if session_verified and connector.account_mode == "PRACTICE" else "UNVERIFIED"
+            connection_state = "CONNECTED" if session_verified else "DISCONNECTED"
+        else:
+            account_mode = str(getattr(connector, "account_mode", "BROKER"))
+            connection_state = "CONNECTED" if connector.connected else "DISCONNECTED"
+        account_labels = {
+            "SIMULATION": "Simulation",
+            "PRACTICE": "Practice Account",
+            "UNVERIFIED": "Account Unverified",
+        }
+        execution_labels = {
+            ExecutionMode.SIMULATION: "Simulation",
+            ExecutionMode.DEMO: "Practice",
+            ExecutionMode.LIVE: "REAL (Locked)",
+        }
         return TradingStateResponse(
-            execution_mode=ExecutionMode(state.execution_mode),
+            execution_mode=execution_mode,
+            execution_mode_label=execution_labels[execution_mode],
+            account_mode=account_mode,
+            account_display_label=account_labels.get(account_mode, account_mode.title()),
             connector_name=connector.name,
-            connector_connected=connector.connected,
-            live_authorized=bool(connector.live_authorized and settings.allow_live_trading),
+            connector_connected=bool(connector.connected and session_verified) if isinstance(connector, IQOptionBrokerConnector) else bool(connector.connected and not isinstance(connector, SimulationConnector)),
+            connection_state=connection_state,
+            session_verified=session_verified,
+            live_authorized=False,
+            real_account_locked=True,
+            operation_mode="AUTO" if policy.auto_trade_enabled else "MANUAL",
+            learning_status="IDLE",
+            training_status="IDLE",
+            backtest_status="IDLE",
             balance=balance,
             total_trades_today=summary.total_trades,
             wins_today=summary.wins,
