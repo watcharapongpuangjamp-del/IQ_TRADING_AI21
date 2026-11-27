@@ -285,7 +285,16 @@ class IQOptionBrokerConnector(BrokerConnector):
                     "leverage": leverage,
                     "source": "IQ_OPTION_IQAIR_ASSET_METADATA",
                 })
-        items.sort(key=lambda item: (item["product_type"], item["status"] != "OPEN", item["symbol"]))
+        # Stable display order: product family, open first, highest broker payout first.
+        items.sort(key=lambda item: (
+            item["product_type"],
+            item["status"] != "OPEN",
+            item["payout_rate"] is None,
+            -(item["payout_rate"] or 0.0),
+            item["symbol"],
+        ))
+        for rank, item in enumerate(items, start=1):
+            item["rank"] = rank
         unavailable = [
             key.upper() for key in category_aliases
             if key.upper() not in supported
