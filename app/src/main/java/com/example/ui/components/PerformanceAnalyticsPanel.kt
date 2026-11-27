@@ -78,7 +78,7 @@ fun PerformanceAnalyticsPanel(
                 )
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Performance Analytics (แยกโหมด SIM / LIVE)",
+                        text = "Performance Analytics (แยก SIM / PRACTICE / LIVE)",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.Bold
@@ -98,6 +98,7 @@ fun PerformanceAnalyticsPanel(
             ) {
                 listOf(
                     "SIMULATION" to "SIMULATION",
+                    "PRACTICE" to "PRACTICE",
                     "LIVE" to "LIVE",
                     "ALL" to "All (Labeled)"
                 ).forEach { (key, label) ->
@@ -145,7 +146,7 @@ fun PerformanceAnalyticsPanel(
                 )
                 AnalyticsKpiCell(
                     label = "Win Rate",
-                    value = "${String.format("%.1f%%", summary.winRatePct)} (${summary.wins}W/${summary.losses}L)",
+                    value = "${String.format("%.1f%%", summary.winRatePct)} (${summary.wins}W/${summary.draws}D/${summary.losses}L)",
                     color = tradingColors.cyan,
                     modifier = Modifier.weight(1f)
                 )
