@@ -100,6 +100,23 @@ class SecureCredentialVault(context: Context) {
 
     fun getTelegramBotToken(): String? = readEncryptedSecret(KEY_TELEGRAM_TOKEN)
 
+    /** Store broker credentials locally with Android Keystore AES-GCM encryption. */
+    fun saveBrokerCredentials(email: String, password: String) {
+        require(email.isNotBlank()) { "Broker email is required." }
+        require(password.isNotEmpty()) { "Broker password is required." }
+        storeEncryptedSecret(KEY_BROKER_EMAIL, email.trim())
+        storeEncryptedSecret(KEY_BROKER_PASSWORD, password)
+    }
+
+    fun getBrokerEmail(): String? = readEncryptedSecret(KEY_BROKER_EMAIL)
+
+    fun getBrokerPassword(): String? = readEncryptedSecret(KEY_BROKER_PASSWORD)
+
+    fun clearBrokerCredentials() {
+        removeEncryptedSecret(KEY_BROKER_EMAIL)
+        removeEncryptedSecret(KEY_BROKER_PASSWORD)
+    }
+
     fun verifyKeystoreReady(): Boolean = try {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateAesKey())
@@ -162,5 +179,7 @@ class SecureCredentialVault(context: Context) {
         const val PREFS_NAME = "iq_trading_secure_vault"
         const val KEY_BACKEND_TOKEN = "enc_backend_token"
         const val KEY_TELEGRAM_TOKEN = "enc_telegram_bot_token"
+        const val KEY_BROKER_EMAIL = "enc_broker_email"
+        const val KEY_BROKER_PASSWORD = "enc_broker_password"
     }
 }
