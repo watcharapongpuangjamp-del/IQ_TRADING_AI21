@@ -9,6 +9,7 @@ Safety contract:
 import asyncio
 import math
 import time
+import threading
 from typing import Any, Dict, List, Optional
 
 from app.connectors.base import BrokerConnector, ConnectorOrderResult
@@ -48,7 +49,7 @@ class IQOptionBrokerConnector(BrokerConnector):
             raise ValueError("IQ Option connector is Practice-only; REAL account mode is locked.")
         self._email = email.strip()
         self._password = password
-        self._timeout = max(3.0, float(timeout_seconds))
+        self._timeout = max(35.0, float(timeout_seconds))
         self._client = None
         self._connected = False
         self._verified = False
@@ -56,6 +57,8 @@ class IQOptionBrokerConnector(BrokerConnector):
         self._account_mode = "DISCONNECTED"
         self._orders: Dict[str, Dict[str, Any]] = {}
         self._lock = asyncio.Lock()
+        self._sync_lock = threading.RLock()
+        # iqair stores request responses in shared mutable client fields; serialize calls.
 
     @property
     def name(self) -> str:
@@ -94,7 +97,19 @@ class IQOptionBrokerConnector(BrokerConnector):
         ]
 
     async def _run(self, fn, *args):
-        return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=self._timeout)
+        def invoke():
+            # Serialize access to iqair's shared websocket response state.
+            with self._sync_lock:
+                return fn(*args)
+
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(invoke), timeout=self._timeout)
+        except TimeoutError:
+            # A timed-out worker thread cannot be force-killed safely. Fail closed.
+            self._connected = False
+            self._verified = False
+            self._account_mode = "DEGRADED"
+            raise
 
     def _require_client(self):
         if not self.connected:
