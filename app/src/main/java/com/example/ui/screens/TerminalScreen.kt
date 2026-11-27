@@ -458,7 +458,7 @@ fun TerminalScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        "${asset.productLabel} • ${asset.symbol}",
+                                        "#${asset.rank.toString().padStart(2, '0')} • ${asset.productLabel} • ${asset.symbol}",
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold
                                     )
