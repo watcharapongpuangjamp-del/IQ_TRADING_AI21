@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -69,6 +70,8 @@ import com.example.viewmodel.TradingViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private val android.content.Context.accountPreferencesDataStore by preferencesDataStore(name = "account_settings")
 
 private object NavRoutes {
     const val TERMINAL = "terminal"
@@ -139,6 +142,7 @@ private fun LocalTradingShell(
                 val dao = TradingDatabase.getInstance(app).tradingDao()
                 TradingViewModel(
                     localRepository = LocalTradingRepository(dao),
+                    accountPreferences = app.accountPreferencesDataStore,
                     credentialVault = SecureCredentialVault(app),
                     telegramNotifier = TelegramNotifier(),
                     backendClient = BackendConnectorClient(),
