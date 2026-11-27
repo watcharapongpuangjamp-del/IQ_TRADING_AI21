@@ -284,7 +284,7 @@ fun SettingsDocsScreen(
                 ) {
                     Text("IQ Option — On-device Practice Connection", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "เชื่อมต่อผ่าน Python Engine ที่ฝังใน APK โดยตรง ใช้ได้เฉพาะ Practice และอ่านข้อมูลบัญชีเท่านั้น",
+                        "เชื่อมต่อผ่าน Python Engine ที่ฝังใน APK โดยตรง ใช้ได้เฉพาะ Practice และรองรับการส่งคำสั่ง Manual เพื่อทดสอบ",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -373,7 +373,7 @@ fun SettingsDocsScreen(
                                     result.balance?.let { balance ->
                                         Text("ยอดเงินที่โบรกเกอร์รายงาน: ${String.format(Locale.US, "%.2f", balance)} ${result.currency.orEmpty()}")
                                     }
-                                    Text("ส่งคำสั่งซื้อขาย: ปิดใช้งาน (Read-only)")
+                                    Text(if (result.ordersEnabled) "ส่งคำสั่งซื้อขาย: Manual Practice เปิดใช้งาน" else "ส่งคำสั่งซื้อขาย: ปิดใช้งาน")
                                 } else {
                                     Text(result.error ?: result.state)
                                 }
