@@ -25,7 +25,7 @@ from app.engines.execution_engine import (
     ExecutionValidationError,
     TradeExecutionEngine,
 )
-from app.engines.learning_engine import LearningEvaluationEngine
+from app.engines.learning_engine import LearningEvaluationEngine\nfrom app.engines.latency_intelligence import LatencySample, summarize_latency
 from app.engines.market_intelligence import MarketIntelligenceEngine
 from app.engines.multi_timeframe import MultiTimeframeEngine
 from app.engines.replay_engine import SimulatorReplayEngine
@@ -35,7 +35,7 @@ from app.engines.technical_analysis import TechnicalAnalysisEngine
 from app.ml.inference import MLSignalInferenceService
 from app.ml.registry import ModelRegistryService
 from app.ml.trainer import ModelTrainer, ValidationGatePolicy
-from app.models import ModelRegistryModel, OrderRecordModel, RiskPolicyModel, TradingStateModel
+from app.models import LatencySampleModel, ModelRegistryModel, OrderRecordModel, RiskPolicyModel, TradingStateModel
 from app.repositories.historical_candles import HistoricalCandleRepository
 from app.schemas import (
     BacktestRunRequest,
@@ -156,6 +156,137 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             allow_methods=["GET", "POST", "PUT"],
             allow_headers=["Authorization", "Content-Type"],
         )
+
+    @application.middleware("http")
+    async def capture_backend_processing_time(request, call_next):
+        started = time.perf_counter()
+        succeeded = True
+        try:
+            response = await call_next(request)
+            succeeded = response.status_code < 500
+            return response
+        except Exception:
+            succeeded = False
+            raise
+        finally:
+            path = request.url.path
+            if path not in {"/api/v1/latency/summary", "/api/v1/latency/history", "/api/v1/connection/status", "/api/v1/health"} and path.startswith("/api/"):
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                db_session = SessionLocal()
+                try:
+                    state = db_session.get(TradingStateModel, 1)
+                    db_session.add(LatencySampleModel(
+                        sample_id=uuid.uuid4().hex,
+                        recorded_at=datetime.now(timezone.utc),
+                        metric_name="backend_processing",
+                        duration_ms=elapsed_ms,
+                        success=succeeded,
+                        timed_out=False,
+                        source="backend_middleware",
+                        connector=connector.name,
+                        account_mode=(state.execution_mode if state else "UNKNOWN"),
+                        connection_generation=0,
+                    ))
+                    db_session.commit()
+                except Exception:
+                    db_session.rollback()
+                finally:
+                    db_session.close()
+
+    @application.get(
+        "/api/v1/connection/status",
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Connection Intelligence"],
+    )
+    async def get_connection_status(db: Session = Depends(get_db)) -> Dict[str, object]:
+        state = TradeExecutionEngine.get_or_create_state(db)
+        is_iqoption_stub = isinstance(connector, IQOptionBrokerConnector)
+        connected_flag = bool(connector.connected)
+        return {
+            "connector": connector.name,
+            "account_mode": state.execution_mode,
+            "connector_connected": connected_flag,
+            "session_verified": bool(connected_flag and not is_iqoption_stub),
+            "connection_state": "CONNECTED" if connected_flag and not is_iqoption_stub else ("SIMULATED" if is_iqoption_stub else "DISCONNECTED"),
+            "new_orders_allowed_by_connection_monitor": bool(connected_flag and not is_iqoption_stub),
+            "measurement_source": "connector_state",
+            "note": "IQ Option adapter currently simulates connection state; broker session is not verified." if is_iqoption_stub else "Connection flag is reported by the configured connector.",
+        }
+
+    @application.get(
+        "/api/v1/latency/summary",
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Connection Intelligence"],
+    )
+    async def get_latency_summary(
+        window: str = Query(default="5m", pattern="^(5m|1h|24h)$"),
+        db: Session = Depends(get_db),
+    ) -> Dict[str, object]:
+        window_minutes = {"5m": 5, "1h": 60, "24h": 1440}[window]
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+        rows = (
+            db.query(LatencySampleModel)
+            .filter(LatencySampleModel.recorded_at >= cutoff)
+            .order_by(LatencySampleModel.recorded_at.asc())
+            .limit(5000)
+            .all()
+        )
+        metrics = {}
+        for metric in ("backend_processing", "app_backend_rtt", "broker_rtt", "order_ack"):
+            samples = [
+                LatencySample(metric=row.metric_name, duration_ms=row.duration_ms,
+                              success=row.success, source=row.source)
+                for row in rows if row.metric_name == metric
+            ]
+            summary = summarize_latency(samples, metric)
+            metrics[metric] = {
+                "sample_count": summary.sample_count,
+                "success_count": summary.success_count,
+                "failure_count": summary.failure_count,
+                "min_ms": summary.min_ms,
+                "p50_ms": summary.p50_ms,
+                "p95_ms": summary.p95_ms,
+                "max_ms": summary.max_ms,
+                "jitter_ms": summary.jitter_ms,
+                "timeout_rate": summary.timeout_rate,
+                "available": summary.success_count > 0,
+            }
+        return {
+            "window": window,
+            "window_minutes": window_minutes,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "metrics": metrics,
+            "broker_rtt_status": "NOT_MEASURED",
+            "order_ack_status": "NOT_MEASURED",
+            "note": "Only backend processing time is currently sampled automatically. Missing metrics are not estimated.",
+        }
+
+    @application.get(
+        "/api/v1/latency/history",
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Connection Intelligence"],
+    )
+    async def get_latency_history(
+        metric: str = Query(default="backend_processing", pattern="^(backend_processing|app_backend_rtt|broker_rtt|order_ack)$"),
+        limit: int = Query(default=100, ge=1, le=1000),
+        db: Session = Depends(get_db),
+    ) -> List[Dict[str, object]]:
+        rows = (
+            db.query(LatencySampleModel)
+            .filter(LatencySampleModel.metric_name == metric)
+            .order_by(LatencySampleModel.recorded_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [{
+            "recorded_at": row.recorded_at.isoformat(),
+            "metric": row.metric_name,
+            "duration_ms": row.duration_ms,
+            "success": row.success,
+            "source": row.source,
+            "connector": row.connector,
+            "account_mode": row.account_mode,
+        } for row in rows]
 
     @application.get("/api/v1/health", response_model=HealthResponse, tags=["System"])
     async def get_health(db: Session = Depends(get_db)) -> HealthResponse:
