@@ -1,7 +1,10 @@
 import math
 import time
 import unittest
-from types import SimpleNamespace
+import sys
+from enum import Enum
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 from iq_engine.practice_gateway import GatewayError, PracticeReadOnlyGateway
 
@@ -48,6 +51,19 @@ class FakeClient:
 
     def get_balance(self):
         return self.balance
+
+
+
+def fake_iqair_broker_module():
+    module = ModuleType("iqair.broker")
+    class TradeMode(str, Enum):
+        TURBO = "turbo-option"
+    class TradeSide(str, Enum):
+        CALL = "call"
+        PUT = "put"
+    module.TradeMode = TradeMode
+    module.TradeSide = TradeSide
+    return module
 
 
 class PracticeGatewayTests(unittest.TestCase):
@@ -151,7 +167,8 @@ class PracticeGatewayTests(unittest.TestCase):
                 self.kwargs = kwargs
                 return FakeTrade()
         gateway._client.broker = FakeBroker()
-        result = gateway.submit_practice_order("EURUSD", "CALL", 10, 1)
+        with patch.dict(sys.modules, {"iqair": ModuleType("iqair"), "iqair.broker": fake_iqair_broker_module()}):
+            result = gateway.submit_practice_order("EURUSD", "CALL", 10, 1)
         self.assertEqual(result["orderId"], "order-123")
         self.assertEqual(result["outcome"], "WIN")
         self.assertEqual(result["pnl"], 8.5)
@@ -172,11 +189,13 @@ class PracticeGatewayTests(unittest.TestCase):
             def trade(self, **kwargs):
                 return FakeTrade()
         gateway._client.broker = FakeBroker()
-        with self.assertRaises(GatewayError):
-            gateway.submit_practice_order("EURUSD", "PUT", 10, 1)
+        with patch.dict(sys.modules, {"iqair": ModuleType("iqair"), "iqair.broker": fake_iqair_broker_module()}):
+            with self.assertRaises(GatewayError):
+                gateway.submit_practice_order("EURUSD", "PUT", 10, 1)
         self.assertEqual(gateway.state, "ORDER_UNKNOWN")
-        with self.assertRaisesRegex(GatewayError, "unresolved outcome"):
-            gateway.submit_practice_order("EURUSD", "CALL", 10, 1)
+        with patch.dict(sys.modules, {"iqair": ModuleType("iqair"), "iqair.broker": fake_iqair_broker_module()}):
+            with self.assertRaisesRegex(GatewayError, "unresolved outcome"):
+                gateway.submit_practice_order("EURUSD", "CALL", 10, 1)
 
     def test_order_submission_is_disabled(self):
         gateway = PracticeReadOnlyGateway(FakeClient)
