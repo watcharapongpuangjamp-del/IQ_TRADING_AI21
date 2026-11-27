@@ -9,19 +9,15 @@ plugins {
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
-
   defaultConfig {
     applicationId = "com.aistudio.iqtrading.mrxkqp"
     minSdk = 24
     targetSdk = 36
     versionCode = 1
     versionName = "1.0"
-    ndk {
-      abiFilters += listOf("arm64-v8a", "x86_64")
-    }
+    ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
-
   signingConfigs {
     create("release") {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
@@ -37,7 +33,6 @@ android {
       keyPassword = "android"
     }
   }
-
   buildTypes {
     release {
       isCrunchPngs = false
@@ -55,20 +50,18 @@ android {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
   }
-  buildFeatures {
-    compose = true
-    buildConfig = true
-  }
+  buildFeatures { compose = true; buildConfig = true }
   testOptions { unitTests { isIncludeAndroidResources = true } }
-  dependenciesInfo {
-    includeInApk = false
-    includeInBundle = true
-  }
+  dependenciesInfo { includeInApk = false; includeInBundle = true }
 }
 
 chaquopy {
   defaultConfig {
     version = "3.12"
+    pip {
+      install("iqair==1.0.0")
+      install("certifi")
+    }
   }
 }
 
