@@ -903,6 +903,13 @@ class TestPurePythonEngines(unittest.TestCase):
                 self.assertFalse(connector.live_authorized)
                 self.assertEqual(await connector.get_balance(), 1234.56)
                 self.assertEqual(await connector.get_payout_rate("EUR/USD", 60), 0.87)
+                catalog = await connector.get_asset_catalog()
+                self.assertEqual(catalog["account_mode"], "PRACTICE")
+                self.assertIn("TURBO", catalog["supported_product_types"])
+                self.assertIn("BLITZ", catalog["unavailable_product_types"])
+                eurusd = next(item for item in catalog["items"] if item["symbol"] == "EURUSD")
+                self.assertEqual(eurusd["status"], "OPEN")
+                self.assertEqual(eurusd["payout_percent"], 87.0)
 
                 candles = await connector.get_candles("EUR/USD", "1m", limit=30)
                 self.assertEqual(len(candles), 30)
