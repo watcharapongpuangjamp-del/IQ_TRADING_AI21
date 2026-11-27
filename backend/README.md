@@ -72,3 +72,19 @@ The first integration slice replaces the former random/mock IQ Option adapter wi
 The supplied package also implements Digital Options, Forex margin, Crypto margin, CFD margin, asset metadata, and streaming helpers. Those trading modes require additional order-schema, direction, leverage, margin-risk, close-position, and Android UI contracts before they can safely be enabled through this application's existing CALL/PUT binary-options execution pipeline. They are not advertised as executable capabilities in the current connector. Keep them disabled until their end-to-end tests and reconciliation paths are implemented.
 
 The package is unofficial and talks to an undocumented broker protocol. It can break when IQ Option changes its backend. CI tests use a fake client and never log in or place real broker orders.
+
+## Trading Terminal: Explicit Modes and Asset Directory
+
+The terminal keeps independent dimensions separate:
+
+- **Account / execution mode:** `SIMULATION`, verified `PRACTICE`, and `REAL (LOCKED)`.
+- **Operation mode:** `MANUAL` or `AUTO`, derived from the risk policy's auto-trade setting.
+- **AI workflow state:** `LEARNING` and `TRAINING` lifecycle labels; an idle state must be shown as `IDLE`, not implied to be actively training.
+- **Research state:** `BACKTEST` / replay is separate from a broker account and cannot place broker orders.
+- **Order state:** `CREATED`, `VALIDATED`, `AUTHORIZED`, `SUBMITTED`, `ACCEPTED`, `PENDING`, `SETTLED`, `REJECTED`, `FAILED`, and `UNKNOWN` remain distinct.
+
+The terminal reads `GET /api/v1/state` for account, session, operation and workflow labels. It reads `GET /api/v1/assets/catalog` for broker-reported product types and assets. Catalog rows include product type, symbol, OPEN/CLOSED/UNKNOWN status, payout rate/percent, minimum/maximum stake, leverage when supplied, and the metadata source.
+
+Product types are normalized from the package's asset metadata (Turbo, Binary, Digital, Forex, Crypto and CFD; Blitz and Futures are listed only if the broker API actually returns them). Missing product types are explicitly returned in `unavailable_product_types`; absence is not represented as an active market. Payout is displayed only when the broker reports it. Simulation-only instrument payout assumptions are labelled as estimates and must never be presented as broker payout.
+
+The current order execution path remains Turbo/Binary CALL/PUT. Digital, Blitz, Futures and margin products are directory-only until their order and position lifecycles are fully implemented and tested. REAL remains hard-locked in the UI and backend.
