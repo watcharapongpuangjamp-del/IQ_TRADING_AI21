@@ -420,7 +420,7 @@ private fun LocalTradingShell(
                     ) {
                         Text(
                             text = if (isBrokerPracticeConnected) {
-                                "IQ OPTION PRACTICE • READ ONLY"
+                                "IQ OPTION PRACTICE • MANUAL"
                             } else {
                                 "SIMULATED"
                             },
