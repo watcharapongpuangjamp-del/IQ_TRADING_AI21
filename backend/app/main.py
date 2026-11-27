@@ -123,7 +123,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         ensure_schema_migrations(engine)
-        if settings.broker_adapter.strip().lower() == "http":
+        if settings.broker_adapter.strip().lower() in {"http", "iqoption"}:
             await connector.connect()
         db = SessionLocal()
         try:
@@ -131,7 +131,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         finally:
             db.close()
         yield
-        if settings.broker_adapter.strip().lower() == "http":
+        if settings.broker_adapter.strip().lower() in {"http", "iqoption"}:
             await connector.disconnect()
 
     application = FastAPI(
@@ -203,17 +203,24 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     )
     async def get_connection_status(db: Session = Depends(get_db)) -> Dict[str, object]:
         state = TradeExecutionEngine.get_or_create_state(db)
-        is_iqoption_stub = isinstance(connector, IQOptionBrokerConnector)
         connected_flag = bool(connector.connected)
+        verified = bool(getattr(connector, "session_verified", connected_flag))
+        broker_mode = getattr(connector, "account_mode", None)
+        if isinstance(connector, IQOptionBrokerConnector):
+            broker_mode = broker_mode or "UNVERIFIED"
+            verified = bool(verified and broker_mode == "PRACTICE")
         return {
             "connector": connector.name,
-            "account_mode": state.execution_mode,
+            "execution_mode": state.execution_mode,
+            "account_mode": broker_mode or ("SIMULATION" if isinstance(connector, SimulationConnector) else "UNKNOWN"),
             "connector_connected": connected_flag,
-            "session_verified": bool(connected_flag and not is_iqoption_stub),
-            "connection_state": "CONNECTED" if connected_flag and not is_iqoption_stub else ("SIMULATED" if is_iqoption_stub else "DISCONNECTED"),
-            "new_orders_allowed_by_connection_monitor": bool(connected_flag and not is_iqoption_stub),
-            "measurement_source": "connector_state",
-            "note": "IQ Option adapter currently simulates connection state; broker session is not verified." if is_iqoption_stub else "Connection flag is reported by the configured connector.",
+            "session_verified": verified,
+            "connection_state": "CONNECTED" if connected_flag and verified else ("DISCONNECTED" if not connected_flag else "UNVERIFIED"),
+            "new_orders_allowed_by_connection_monitor": bool(connected_flag and verified),
+            "real_account_locked": True,
+            "live_authorized": False,
+            "measurement_source": "broker_session_and_account_profile",
+            "note": "IQ Option Practice account is verified; REAL account selection and execution are locked." if isinstance(connector, IQOptionBrokerConnector) and verified else "Broker connection/account mode is not verified.",
         }
 
     @application.get(
