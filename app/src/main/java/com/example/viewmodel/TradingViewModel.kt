@@ -2,6 +2,10 @@ package com.example.viewmodel
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.viewModelScope
 import com.example.broker.AccountType
 import com.example.data.remote.BackendConnectorClient
@@ -113,6 +117,7 @@ data class TerminalUiState(
 
 class TradingViewModel(
     private val localRepository: LocalTradingRepository,
+    private val accountPreferences: DataStore<Preferences>,
     private val credentialVault: SecureCredentialVault,
     private val telegramNotifier: TelegramNotifier,
     private val backendClient: BackendConnectorClient,
@@ -125,11 +130,21 @@ class TradingViewModel(
     private val simEngine = MarketSimulationEngine()
     private val _terminalState = MutableStateFlow(TerminalUiState())
 
+    private val accountTypeKey = stringPreferencesKey("selected_account_type")
     private val _selectedAccountType = MutableStateFlow(AccountType.PRACTICE)
     val selectedAccountType: StateFlow<AccountType> = _selectedAccountType.asStateFlow()
 
     fun selectAccountType(accountType: AccountType) {
         _selectedAccountType.value = accountType
+        viewModelScope.launch {
+            runCatching {
+                accountPreferences.edit { preferences ->
+                    preferences[accountTypeKey] = accountType.name
+                }
+            }.onFailure {
+                _snackbarMessage.value = "บันทึกประเภทบัญชีในเครื่องไม่สำเร็จ: ${it.localizedMessage}"
+            }
+        }
         _snackbarMessage.value = if (accountType == AccountType.PRACTICE) {
             "เลือก Practice Account แล้ว"
         } else {
@@ -245,6 +260,14 @@ class TradingViewModel(
     private var autoCycleCounter = 0
 
     init {
+        viewModelScope.launch {
+            accountPreferences.data.collect { preferences ->
+                val persisted = preferences[accountTypeKey]
+                    ?.let { stored -> runCatching { AccountType.valueOf(stored) }.getOrNull() }
+                    ?: AccountType.PRACTICE
+                _selectedAccountType.value = persisted
+            }
+        }
         viewModelScope.launch {
             localRepository.ensureUserBootstrap(currentUserId, userDisplayName, userEmail)
                 .onFailure { _snackbarMessage.value = "เตรียมฐานข้อมูล SQLite เริ่มต้นไม่สำเร็จ: ${it.localizedMessage}" }
