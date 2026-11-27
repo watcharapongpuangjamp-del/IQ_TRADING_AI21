@@ -448,6 +448,7 @@ data class InstrumentSpec(
 )
 
 data class AssetCatalogItem(
+    val rank: Int,
     val productType: String,
     val productLabel: String,
     val symbol: String,
