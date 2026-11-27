@@ -2,6 +2,9 @@ import asyncio
 from contextlib import asynccontextmanager
 import hmac
 import re
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from dataclasses import asdict, replace
@@ -26,6 +29,7 @@ from app.engines.execution_engine import (
     TradeExecutionEngine,
 )
 from app.engines.learning_engine import LearningEvaluationEngine
+from app.engines.latency_intelligence import LatencySample, summarize_latency
 from app.engines.market_intelligence import MarketIntelligenceEngine
 from app.engines.multi_timeframe import MultiTimeframeEngine
 from app.engines.replay_engine import SimulatorReplayEngine
@@ -35,9 +39,12 @@ from app.engines.technical_analysis import TechnicalAnalysisEngine
 from app.ml.inference import MLSignalInferenceService
 from app.ml.registry import ModelRegistryService
 from app.ml.trainer import ModelTrainer, ValidationGatePolicy
-from app.models import ModelRegistryModel, OrderRecordModel, RiskPolicyModel, TradingStateModel
+from app.models import LatencySampleModel, ModelRegistryModel, OrderRecordModel, RiskPolicyModel, TradingStateModel
 from app.repositories.historical_candles import HistoricalCandleRepository
 from app.schemas import (
+    AssetCatalogResponse,
+    IQOptionConnectRequest,
+    IQOptionConnectResponse,
     BacktestRunRequest,
     BacktestRunResponse,
     BrokerDryRunRequest,
@@ -104,7 +111,8 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             email=settings.iqoption_email,
             password=settings.iqoption_password,
             balance_mode=settings.iqoption_balance_mode,
-            initial_balance=10000.0,
+            initial_balance=0.0,
+            timeout_seconds=settings.broker_timeout_seconds,
         )
     else:
         connector = SimulationConnector(initial_balance=10000.0)
@@ -122,13 +130,18 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         ensure_schema_migrations(engine)
         if settings.broker_adapter.strip().lower() == "http":
             await connector.connect()
+        elif settings.broker_adapter.strip().lower() == "iqoption":
+            # Login is user-initiated from the Android Practice connector panel.
+            # Do not fail backend startup when credentials are intentionally absent.
+            if settings.iqoption_email and settings.iqoption_password:
+                await connector.connect()
         db = SessionLocal()
         try:
             seed_initial_records(db)
         finally:
             db.close()
         yield
-        if settings.broker_adapter.strip().lower() == "http":
+        if settings.broker_adapter.strip().lower() in {"http", "iqoption"}:
             await connector.disconnect()
 
     application = FastAPI(
@@ -156,6 +169,236 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             allow_methods=["GET", "POST", "PUT"],
             allow_headers=["Authorization", "Content-Type"],
         )
+
+    @application.middleware("http")
+    async def capture_backend_processing_time(request, call_next):
+        started = time.perf_counter()
+        succeeded = True
+        try:
+            response = await call_next(request)
+            succeeded = response.status_code < 500
+            return response
+        except Exception:
+            succeeded = False
+            raise
+        finally:
+            path = request.url.path
+            if path not in {"/api/v1/latency/summary", "/api/v1/latency/history", "/api/v1/connection/status", "/api/v1/health"} and path.startswith("/api/"):
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                db_session, db_generator = _open_ws_db()
+                try:
+                    state = db_session.get(TradingStateModel, 1)
+                    db_session.add(LatencySampleModel(
+                        sample_id=uuid.uuid4().hex,
+                        recorded_at=datetime.now(timezone.utc),
+                        metric_name="backend_processing",
+                        duration_ms=elapsed_ms,
+                        success=succeeded,
+                        timed_out=False,
+                        source="backend_middleware",
+                        connector=connector.name,
+                        account_mode=(state.execution_mode if state else "UNKNOWN"),
+                        connection_generation=0,
+                    ))
+                    db_session.commit()
+                except Exception:
+                    db_session.rollback()
+                finally:
+                    db_generator.close()
+
+    @application.post(
+        "/api/v1/iqoption/connect",
+        response_model=IQOptionConnectResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["IQ Option Practice"],
+    )
+    async def connect_iqoption_practice(
+        payload: IQOptionConnectRequest,
+        db: Session = Depends(get_db),
+    ) -> IQOptionConnectResponse:
+        if not isinstance(connector, IQOptionBrokerConnector):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Backend broker_adapter must be set to 'iqoption' before Practice login.",
+            )
+        try:
+            await connector.connect_with_credentials(payload.email, payload.password)
+            balance = await connector.get_balance()
+            # Persist only the selected execution mode; credentials remain in-memory.
+            state = TradeExecutionEngine.get_or_create_state(db)
+            state.execution_mode = ExecutionMode.DEMO.value
+            db.commit()
+            return IQOptionConnectResponse(
+                connected=True,
+                account_mode="PRACTICE",
+                session_verified=True,
+                balance=balance,
+                connector=connector.name,
+                real_account_locked=True,
+                live_authorized=False,
+            )
+        except Exception as exc:
+            # Do not echo credentials or authentication payloads in API errors.
+            await connector.disconnect()
+            state = TradeExecutionEngine.get_or_create_state(db)
+            state.execution_mode = ExecutionMode.SIMULATION.value
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"IQ Option Practice login/verification failed: {type(exc).__name__}",
+            ) from exc
+
+    @application.post(
+        "/api/v1/iqoption/disconnect",
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["IQ Option Practice"],
+    )
+    async def disconnect_iqoption_practice(db: Session = Depends(get_db)) -> Dict[str, object]:
+        if isinstance(connector, IQOptionBrokerConnector):
+            await connector.disconnect()
+        state = TradeExecutionEngine.get_or_create_state(db)
+        state.execution_mode = ExecutionMode.SIMULATION.value
+        db.commit()
+        return {
+            "connected": False,
+            "account_mode": "DISCONNECTED",
+            "session_verified": False,
+            "real_account_locked": True,
+            "live_authorized": False,
+        }
+
+    @application.get(
+        "/api/v1/connection/status",
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Connection Intelligence"],
+    )
+    async def get_connection_status(db: Session = Depends(get_db)) -> Dict[str, object]:
+        state = TradeExecutionEngine.get_or_create_state(db)
+        connected_flag = bool(connector.connected)
+        verified = bool(getattr(connector, "session_verified", connected_flag))
+        if isinstance(connector, SimulationConnector):
+            # Internal simulation is not a broker connection.
+            connected_flag = False
+            verified = False
+        broker_mode = getattr(connector, "account_mode", None)
+        if isinstance(connector, IQOptionBrokerConnector):
+            broker_mode = broker_mode or "UNVERIFIED"
+            verified = bool(verified and broker_mode == "PRACTICE")
+        return {
+            "connector": connector.name,
+            "execution_mode": state.execution_mode,
+            "account_mode": broker_mode or ("SIMULATION" if isinstance(connector, SimulationConnector) else "UNKNOWN"),
+            "connector_connected": connected_flag,
+            "session_verified": verified,
+            "connection_state": "CONNECTED" if connected_flag and verified else ("DISCONNECTED" if not connected_flag else "UNVERIFIED"),
+            "new_orders_allowed_by_connection_monitor": bool(connected_flag and verified),
+            "real_account_locked": True,
+            "live_authorized": False,
+            "measurement_source": "broker_session_and_account_profile",
+            "note": "IQ Option Practice account is verified; REAL account selection and execution are locked." if isinstance(connector, IQOptionBrokerConnector) and verified else "Broker connection/account mode is not verified.",
+        }
+
+    @application.get(
+        "/api/v1/assets/catalog",
+        response_model=AssetCatalogResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Market Assets"],
+    )
+    async def get_asset_catalog() -> AssetCatalogResponse:
+        catalog_reader = getattr(connector, "get_asset_catalog", None)
+        if not callable(catalog_reader):
+            return AssetCatalogResponse(
+                account_mode="SIMULATION" if isinstance(connector, SimulationConnector) else "UNSUPPORTED",
+                connector=connector.name,
+                source="NO_BROKER_ASSET_DIRECTORY",
+                supported_product_types=["SIMULATION"] if isinstance(connector, SimulationConnector) else [],
+                unavailable_product_types=["BLITZ", "BINARY", "DIGITAL", "FUTURES", "FOREX", "CRYPTO", "CFD"],
+                items=[],
+                fetched_at=int(time.time() * 1000),
+            )
+        try:
+            data = await catalog_reader()
+            return AssetCatalogResponse(**data)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Asset directory unavailable: {exc}",
+            ) from exc
+
+    @application.get(
+        "/api/v1/latency/summary",
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Connection Intelligence"],
+    )
+    async def get_latency_summary(
+        window: str = Query(default="5m", pattern="^(5m|1h|24h)$"),
+        db: Session = Depends(get_db),
+    ) -> Dict[str, object]:
+        window_minutes = {"5m": 5, "1h": 60, "24h": 1440}[window]
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+        rows = (
+            db.query(LatencySampleModel)
+            .filter(LatencySampleModel.recorded_at >= cutoff)
+            .order_by(LatencySampleModel.recorded_at.asc())
+            .limit(5000)
+            .all()
+        )
+        metrics = {}
+        for metric in ("backend_processing", "app_backend_rtt", "broker_rtt", "order_ack"):
+            samples = [
+                LatencySample(metric=row.metric_name, duration_ms=row.duration_ms,
+                              success=row.success, source=row.source)
+                for row in rows if row.metric_name == metric
+            ]
+            summary = summarize_latency(samples, metric)
+            metrics[metric] = {
+                "sample_count": summary.sample_count,
+                "success_count": summary.success_count,
+                "failure_count": summary.failure_count,
+                "min_ms": summary.min_ms,
+                "p50_ms": summary.p50_ms,
+                "p95_ms": summary.p95_ms,
+                "max_ms": summary.max_ms,
+                "jitter_ms": summary.jitter_ms,
+                "timeout_rate": summary.timeout_rate,
+                "available": summary.success_count > 0,
+            }
+        return {
+            "window": window,
+            "window_minutes": window_minutes,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "metrics": metrics,
+            "broker_rtt_status": "NOT_MEASURED",
+            "order_ack_status": "NOT_MEASURED",
+            "note": "Only backend processing time is currently sampled automatically. Missing metrics are not estimated.",
+        }
+
+    @application.get(
+        "/api/v1/latency/history",
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["Connection Intelligence"],
+    )
+    async def get_latency_history(
+        metric: str = Query(default="backend_processing", pattern="^(backend_processing|app_backend_rtt|broker_rtt|order_ack)$"),
+        limit: int = Query(default=100, ge=1, le=1000),
+        db: Session = Depends(get_db),
+    ) -> List[Dict[str, object]]:
+        rows = (
+            db.query(LatencySampleModel)
+            .filter(LatencySampleModel.metric_name == metric)
+            .order_by(LatencySampleModel.recorded_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [{
+            "recorded_at": row.recorded_at.isoformat(),
+            "metric": row.metric_name,
+            "duration_ms": row.duration_ms,
+            "success": row.success,
+            "source": row.source,
+            "connector": row.connector,
+            "account_mode": row.account_mode,
+        } for row in rows]
 
     @application.get("/api/v1/health", response_model=HealthResponse, tags=["System"])
     async def get_health(db: Session = Depends(get_db)) -> HealthResponse:
@@ -716,13 +959,46 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         state = TradeExecutionEngine.get_or_create_state(db)
         policy = TradeExecutionEngine.get_or_create_policy(db)
         summary = TradeExecutionEngine.get_or_create_daily_summary(db)
-        balance = await connector.get_balance()
+        balance = await connector.get_balance() if connector.connected else (
+            10000.0 if isinstance(connector, SimulationConnector) else 0.0
+        )
         win_rate = round((summary.wins / summary.total_trades) * 100.0, 2) if summary.total_trades > 0 else 0.0
+        execution_mode = ExecutionMode(state.execution_mode)
+        session_verified = bool(getattr(connector, "session_verified", False))
+        if isinstance(connector, SimulationConnector):
+            account_mode = "SIMULATION"
+            connection_state = "INTERNAL"
+        elif isinstance(connector, IQOptionBrokerConnector):
+            account_mode = "PRACTICE" if session_verified and connector.account_mode == "PRACTICE" else "UNVERIFIED"
+            connection_state = "CONNECTED" if session_verified else "DISCONNECTED"
+        else:
+            account_mode = str(getattr(connector, "account_mode", "BROKER"))
+            connection_state = "CONNECTED" if connector.connected else "DISCONNECTED"
+        account_labels = {
+            "SIMULATION": "Simulation",
+            "PRACTICE": "Practice Account",
+            "UNVERIFIED": "Account Unverified",
+        }
+        execution_labels = {
+            ExecutionMode.SIMULATION: "Simulation",
+            ExecutionMode.DEMO: "Practice",
+            ExecutionMode.LIVE: "REAL (Locked)",
+        }
         return TradingStateResponse(
-            execution_mode=ExecutionMode(state.execution_mode),
+            execution_mode=execution_mode,
+            execution_mode_label=execution_labels[execution_mode],
+            account_mode=account_mode,
+            account_display_label=account_labels.get(account_mode, account_mode.title()),
             connector_name=connector.name,
-            connector_connected=connector.connected,
-            live_authorized=bool(connector.live_authorized and settings.allow_live_trading),
+            connector_connected=bool(connector.connected and session_verified) if isinstance(connector, IQOptionBrokerConnector) else bool(connector.connected and not isinstance(connector, SimulationConnector)),
+            connection_state=connection_state,
+            session_verified=session_verified,
+            live_authorized=False,
+            real_account_locked=True,
+            operation_mode="AUTO" if policy.auto_trade_enabled else "MANUAL",
+            learning_status="IDLE",
+            training_status="IDLE",
+            backtest_status="IDLE",
             balance=balance,
             total_trades_today=summary.total_trades,
             wins_today=summary.wins,

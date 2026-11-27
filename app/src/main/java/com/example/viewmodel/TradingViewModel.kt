@@ -20,6 +20,7 @@ import com.example.engine.SignalEngine
 import com.example.engine.SystemDiagnosticsRunner
 import com.example.engine.TechnicalAnalysisEngine
 import com.example.model.BackendHealthState
+import com.example.model.AssetCatalogItem
 import com.example.model.BackendOrderSummary
 import com.example.model.BacktestReport
 import com.example.model.BrokerDryRunReport
@@ -98,6 +99,19 @@ data class TerminalUiState(
     val isOrderInFlight: Boolean = false,
     val lastLossTimestampMillis: Long? = null,
     val unresolvedOrdersCount: Int = 0,
+    val accountMode: String = "SIMULATION",
+    val accountDisplayLabel: String = "Simulation",
+    val brokerBalance: Double? = null,
+    val connectionState: String = "INTERNAL",
+    val sessionVerified: Boolean = false,
+    val operationMode: String = "MANUAL",
+    val learningStatus: String = "IDLE",
+    val trainingStatus: String = "IDLE",
+    val backtestStatus: String = "IDLE",
+    val realAccountLocked: Boolean = true,
+    val assetCatalog: List<AssetCatalogItem> = emptyList(),
+    val unavailableAssetTypes: List<String> = emptyList(),
+    val assetCatalogSource: String = "LOCAL_SIMULATION",
     val isReconciling: Boolean = false,
     val lastOrderCorrelationId: String? = null,
     val lastOrderLifecycleState: OrderLifecycleState? = null,
@@ -147,6 +161,9 @@ class TradingViewModel(
 
     private val _selectedOrderEvents = MutableStateFlow<List<OrderLifecycleEvent>>(emptyList())
     val selectedOrderEvents: StateFlow<List<OrderLifecycleEvent>> = _selectedOrderEvents.asStateFlow()
+
+    val savedIqOptionEmail: String? = credentialVault.getIqOptionEmail()
+    val savedIqOptionPassword: String? = credentialVault.getIqOptionPassword()
 
     val integrationSettings: StateFlow<IntegrationSettings> = credentialVault.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), IntegrationSettings())
@@ -1197,7 +1214,46 @@ class TradingViewModel(
 
     private suspend fun refreshBackendExecutionState(baseUrl: String, token: String?) {
         backendClient.fetchTradingState(baseUrl, token).onSuccess { stateDto ->
-            _terminalState.update { it.copy(unresolvedOrdersCount = stateDto.unresolved_orders_count) }
+            _terminalState.update {
+                it.copy(
+                    unresolvedOrdersCount = stateDto.unresolved_orders_count,
+                    accountMode = stateDto.account_mode,
+                    accountDisplayLabel = stateDto.account_display_label,
+                    brokerBalance = stateDto.balance,
+                    connectionState = stateDto.connection_state,
+                    sessionVerified = stateDto.session_verified,
+                    operationMode = stateDto.operation_mode,
+                    learningStatus = stateDto.learning_status,
+                    trainingStatus = stateDto.training_status,
+                    backtestStatus = stateDto.backtest_status,
+                    realAccountLocked = stateDto.real_account_locked
+                )
+            }
+        }
+        backendClient.fetchAssetCatalog(baseUrl, token).onSuccess { catalog ->
+            _terminalState.update {
+                it.copy(
+                    assetCatalog = catalog.items.map { item ->
+                        AssetCatalogItem(
+                            rank = item.rank,
+                            productType = item.product_type,
+                            productLabel = item.product_label,
+                            symbol = item.symbol,
+                            displayName = item.display_name,
+                            isOpen = item.is_open,
+                            status = item.status,
+                            payoutRate = item.payout_rate,
+                            payoutPercent = item.payout_percent,
+                            minStake = item.min_stake,
+                            maxStake = item.max_stake,
+                            leverage = item.leverage,
+                            source = item.source
+                        )
+                    },
+                    unavailableAssetTypes = catalog.unavailable_product_types,
+                    assetCatalogSource = catalog.source
+                )
+            }
         }
         backendClient.fetchBackendOrders(baseUrl, token, limit = 30).onSuccess { list ->
             _backendOrders.value = list
@@ -1652,6 +1708,90 @@ class TradingViewModel(
             _snackbarMessage.value = "เข้ารหัส Keystore AES-256-GCM และบันทึกการตั้งค่าแล้ว"
             testBackendConnection()
             startMarketStream()
+        }
+    }
+
+    fun connectPracticeAccount(email: String, password: String, rememberCredentials: Boolean) {
+        viewModelScope.launch {
+            val settings = integrationSettings.value
+            val baseUrl = settings.backendBaseUrl
+            val token = credentialVault.getBackendToken()
+            if (!backendClient.isValidHttpUrl(baseUrl) || token.isNullOrBlank()) {
+                _snackbarMessage.value = "กรุณาตั้งค่า FastAPI URL และ Backend Bearer Token ก่อนเชื่อมต่อ Practice"
+                return@launch
+            }
+            if (!backendClient.isSafeTokenTransport(baseUrl, hasToken = true)) {
+                _snackbarMessage.value = "การส่งข้อมูลบัญชีต้องใช้ HTTPS หรือ localhost เท่านั้น"
+                return@launch
+            }
+            if (rememberCredentials) credentialVault.saveIqOptionCredentials(email, password)
+            else credentialVault.clearIqOptionCredentials()
+
+            _terminalState.update { it.copy(connectionState = "CONNECTING", sessionVerified = false) }
+            val result = backendClient.connectIqOptionPractice(baseUrl, token, email, password)
+            result.onSuccess { connected ->
+                if (!connected.connected || !connected.session_verified || connected.account_mode != "PRACTICE" || connected.live_authorized) {
+                    _terminalState.update { it.copy(connectionState = "UNVERIFIED", sessionVerified = false, accountMode = "UNVERIFIED") }
+                    _snackbarMessage.value = "Broker ตอบกลับแต่ไม่สามารถยืนยัน Practice Session ได้ — ปิดการส่งคำสั่ง"
+                    return@onSuccess
+                }
+                val localSimulationBalance = (profileState.value as? LocalUiState.Success)?.data?.simulationBalance ?: 10000.0
+                localRepository.updateUserBalanceAndMode(
+                    currentUserId, localSimulationBalance, ExecutionMode.DEMO, markSavedTimestamp = true
+                )
+                _backendHealth.update {
+                    it.copy(
+                        connected = true,
+                        checking = false,
+                        connectorName = connected.connector,
+                        supportedCapabilities = it.supportedCapabilities + "PRACTICE_ACCOUNT_ONLY",
+                        liveAuthorized = false,
+                        statusMessage = "IQ Option Practice session verified"
+                    )
+                }
+                _terminalState.update {
+                    it.copy(
+                        accountMode = "PRACTICE",
+                        accountDisplayLabel = "IQ Option Practice",
+                        brokerBalance = connected.balance,
+                        connectionState = "CONNECTED",
+                        sessionVerified = true,
+                        realAccountLocked = true
+                    )
+                }
+                _snackbarMessage.value = "เชื่อมต่อ IQ Option Practice สำเร็จ • Balance: ${format2(connected.balance)}"
+                refreshBackendExecutionState(baseUrl, token)
+            }.onFailure { error ->
+                _terminalState.update { it.copy(connectionState = "DISCONNECTED", sessionVerified = false, accountMode = "UNVERIFIED") }
+                _snackbarMessage.value = "เชื่อมต่อ Practice ไม่สำเร็จ: ${SecretRedactor.redact(error.localizedMessage, token)}"
+            }
+        }
+    }
+
+    fun disconnectPracticeAccount() {
+        viewModelScope.launch {
+            val settings = integrationSettings.value
+            val baseUrl = settings.backendBaseUrl
+            val token = credentialVault.getBackendToken()
+            if (backendClient.isValidHttpUrl(baseUrl)) {
+                backendClient.disconnectIqOptionPractice(baseUrl, token)
+            }
+            val localSimulationBalance = (profileState.value as? LocalUiState.Success)?.data?.simulationBalance ?: 10000.0
+            localRepository.updateUserBalanceAndMode(
+                currentUserId, localSimulationBalance, ExecutionMode.SIMULATION, markSavedTimestamp = true
+            )
+            _terminalState.update {
+                it.copy(
+                    accountMode = "DISCONNECTED",
+                    accountDisplayLabel = "Disconnected",
+                    brokerBalance = null,
+                    connectionState = "DISCONNECTED",
+                    sessionVerified = false,
+                    assetCatalog = emptyList(),
+                    assetCatalogSource = "DISCONNECTED"
+                )
+            }
+            _snackbarMessage.value = "ตัดการเชื่อมต่อ IQ Option Practice แล้ว"
         }
     }
 

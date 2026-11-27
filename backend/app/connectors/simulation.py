@@ -92,6 +92,10 @@ class SimulationConnector(BrokerConnector):
         cache_key = f"{instrument}:{timeframe}"
         if cache_key not in self._candle_cache:
             self._candle_cache[cache_key] = self._generate_initial_candles(instrument, timeframe, max(limit, 80))
+        elif len(self._candle_cache[cache_key]) < limit:
+            # A prior small request may have seeded a shorter cache. Rebuild enough
+            # chronological history instead of returning a truncated backtest window.
+            self._candle_cache[cache_key] = self._generate_initial_candles(instrument, timeframe, limit)
         else:
             self._append_or_update_tick(cache_key, instrument, timeframe)
         return list(self._candle_cache[cache_key][-limit:])

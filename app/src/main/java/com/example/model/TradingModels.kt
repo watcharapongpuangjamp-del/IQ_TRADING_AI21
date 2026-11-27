@@ -2,8 +2,8 @@ package com.example.model
 
 enum class ExecutionMode(val label: String) {
     SIMULATION("SIMULATION"),
-    DEMO("DEMO"),
-    LIVE("LIVE");
+    DEMO("PRACTICE"),
+    LIVE("REAL (LOCKED)");
 
     companion object {
         fun safeValueOf(raw: String?): ExecutionMode =
@@ -445,6 +445,22 @@ data class InstrumentSpec(
     val volatility: Double,
     val payoutRate: Double,
     val decimals: Int
+)
+
+data class AssetCatalogItem(
+    val rank: Int,
+    val productType: String,
+    val productLabel: String,
+    val symbol: String,
+    val displayName: String,
+    val isOpen: Boolean?,
+    val status: String,
+    val payoutRate: Double?,
+    val payoutPercent: Double?,
+    val minStake: Double?,
+    val maxStake: Double?,
+    val leverage: Double?,
+    val source: String
 )
 
 val SUPPORTED_INSTRUMENTS = listOf(

@@ -81,6 +81,34 @@ def test_health_endpoint_defaults_to_simulation(client: TestClient) -> None:
     assert data["live_authorized"] is False
 
 
+def test_iqoption_practice_login_requires_iqoption_adapter(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/iqoption/connect",
+        json={"email": "practice@example.test", "password": "not-a-real-password"},
+    )
+    assert response.status_code == 409
+    assert "broker_adapter" in response.json()["detail"]
+
+
+def test_state_and_asset_catalog_separate_simulation_from_broker_account(client: TestClient) -> None:
+    state = client.get("/api/v1/state")
+    assert state.status_code == 200
+    payload = state.json()
+    assert payload["execution_mode"] == "SIMULATION"
+    assert payload["account_mode"] == "SIMULATION"
+    assert payload["account_display_label"] == "Simulation"
+    assert payload["real_account_locked"] is True
+    assert payload["live_authorized"] is False
+    assert payload["operation_mode"] in {"MANUAL", "AUTO"}
+
+    catalog = client.get("/api/v1/assets/catalog")
+    assert catalog.status_code == 200
+    asset_payload = catalog.json()
+    assert asset_payload["account_mode"] == "SIMULATION"
+    assert asset_payload["items"] == []
+    assert "FUTURES" in asset_payload["unavailable_product_types"]
+
+
 def test_candles_and_signal_pipeline(client: TestClient) -> None:
     candles_res = client.get("/api/v1/candles", params={"instrument": "EUR/USD", "timeframe": "1m", "limit": 60})
     assert candles_res.status_code == 200
@@ -325,6 +353,9 @@ def test_order_lifecycle_10_states_audit_events(client: TestClient) -> None:
 
 
 def test_unknown_timeout_never_resubmits_and_blocks_new_orders_until_reconciled(client: TestClient) -> None:
+    policy = client.get("/api/v1/risk/policy").json()
+    policy["cooldown_minutes"] = 0
+    assert client.put("/api/v1/risk/policy", json=policy).status_code == 200
     connector = client.app.state.connector
     connector.queue_simulation_behavior("TIMEOUT", persistent_unknown=True)
 
@@ -392,11 +423,14 @@ def test_unknown_timeout_never_resubmits_and_blocks_new_orders_until_reconciled(
             "idempotency_key": "idem-after-reconcile-003",
         },
     )
-    assert next_order.status_code == 200
+    assert next_order.status_code == 200, next_order.text
     assert next_order.json()["lifecycle_state"] == "SETTLED"
 
 
 def test_pending_order_auto_reconciles_before_new_trade_without_double_counting(client: TestClient) -> None:
+    policy = client.get("/api/v1/risk/policy").json()
+    policy["cooldown_minutes"] = 0
+    assert client.put("/api/v1/risk/policy", json=policy).status_code == 200
     connector = client.app.state.connector
     connector.queue_simulation_behavior("PENDING")
 
@@ -434,7 +468,7 @@ def test_pending_order_auto_reconciles_before_new_trade_without_double_counting(
             "idempotency_key": "idem-second-after-pending-002",
         },
     )
-    assert second_res.status_code == 200
+    assert second_res.status_code == 200, second_res.text
     assert second_res.json()["lifecycle_state"] == "SETTLED"
 
     reconciled_first = client.get(f"/api/v1/orders/{pending_order['order_id']}").json()
@@ -651,3 +685,35 @@ def test_phase10_broker_dry_run_endpoint_and_auth_isolation(
     )
     assert auth_res.status_code == 200
     assert auth_res.json()["simulation_locked"] is True
+
+
+def test_latency_summary_and_connection_status_are_explicit(client: TestClient) -> None:
+    status_res = client.get("/api/v1/connection/status")
+    assert status_res.status_code == 200
+    status_data = status_res.json()
+    assert status_data["connection_state"] == "DISCONNECTED"
+    assert status_data["session_verified"] is False
+
+    summary_res = client.get("/api/v1/latency/summary", params={"window": "5m"})
+    assert summary_res.status_code == 200
+    body = summary_res.json()
+    assert body["window"] == "5m"
+    assert body["metrics"]["backend_processing"]["available"] is False
+    assert body["metrics"]["broker_rtt"]["available"] is False
+    assert body["broker_rtt_status"] == "NOT_MEASURED"
+
+
+def test_latency_history_is_bounded_and_empty_when_not_measured(client: TestClient) -> None:
+    res = client.get("/api/v1/latency/history", params={"metric": "broker_rtt", "limit": 20})
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_latency_endpoints_require_bearer_token_when_configured(secured_client: TestClient) -> None:
+    res = secured_client.get("/api/v1/latency/summary")
+    assert res.status_code == 401
+    authorized = secured_client.get(
+        "/api/v1/latency/summary",
+        headers={"Authorization": "Bearer test-secret-token-12345"},
+    )
+    assert authorized.status_code == 200

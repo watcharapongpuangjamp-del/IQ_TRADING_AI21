@@ -835,22 +835,112 @@ class TestPurePythonEngines(unittest.TestCase):
         self.assertIn("aqi_us", res)
         self.assertIn("macro_impact_score", res)
 
-    def test_iqoption_broker_connector(self):
-        connector = IQOptionBrokerConnector(email="test@iqoption.com", password="demo", balance_mode="PRACTICE", initial_balance=10000.0)
+    def test_iqoption_broker_connector_uses_verified_practice_session(self):
+        from unittest.mock import patch
+        from app.connectors import iqoption_broker as iq_module
+
+        class FakeAPI:
+            def close(self):
+                return None
+
+        class FakeTrade:
+            order_id = 87654321
+            mode = iq_module.TradeMode.TURBO
+
+        class FakeBroker:
+            def trade(self, **kwargs):
+                assert kwargs["mode"] == iq_module.TradeMode.TURBO
+                assert kwargs["asset"] == "EURUSD"
+                assert kwargs["side"] == iq_module.TradeSide.CALL
+                return FakeTrade()
+
+        class FakeClient:
+            def __init__(self, email, password):
+                self.email = email
+                self.password = password
+                self.api = FakeAPI()
+                self.broker = FakeBroker()
+                self.balance_mode = "REAL"
+
+            def connect(self):
+                return True, None
+
+            def check_connect(self):
+                return True
+
+            def change_balance(self, mode):
+                assert mode == "PRACTICE"
+                self.balance_mode = "PRACTICE"
+
+            def get_balance_mode(self):
+                return self.balance_mode
+
+            def get_balance(self):
+                return 1234.56
+
+            def get_candles(self, ticker, interval, count, endtime):
+                return [
+                    {"from": endtime - (count - i) * interval, "open": 1.08 + i * 0.0001,
+                     "max": 1.081 + i * 0.0001, "min": 1.079 + i * 0.0001,
+                     "close": 1.0805 + i * 0.0001, "volume": 100 + i}
+                    for i in range(count)
+                ]
+
+            def get_asset_metadata(self):
+                return {"turbo": {"EURUSD": {"is_open": True, "payout": 0.87}}}
+
+        connector = IQOptionBrokerConnector(
+            email="practice@example.test", password="local-secret",
+            balance_mode="PRACTICE", timeout_seconds=3,
+        )
+
         async def run_test():
-            self.assertTrue(await connector.connect())
-            self.assertTrue(connector.connected)
-            self.assertFalse(connector.live_authorized)
-            balance = await connector.get_balance()
-            self.assertEqual(balance, 10000.0)
-            candles = await connector.get_candles("EUR/USD", "1m", limit=30)
-            self.assertEqual(len(candles), 30)
-            order = await connector.submit_order("EUR/USD", "1m", "CALL", 50.0, 60, "corr_123")
-            self.assertEqual(order.status, "SETTLED")
-            self.assertIsNotNone(order.broker_order_id)
-            await connector.disconnect()
-            self.assertFalse(connector.connected)
+            with patch.object(iq_module, "IQOptionClient", FakeClient):
+                self.assertTrue(await connector.connect())
+                self.assertTrue(connector.connected)
+                self.assertTrue(connector.session_verified)
+                self.assertEqual(connector.account_mode, "PRACTICE")
+                self.assertFalse(connector.live_authorized)
+                self.assertEqual(await connector.get_balance(), 1234.56)
+                self.assertEqual(await connector.get_payout_rate("EUR/USD", 60), 0.87)
+                catalog = await connector.get_asset_catalog()
+                self.assertEqual(catalog["account_mode"], "PRACTICE")
+                self.assertIn("TURBO", catalog["supported_product_types"])
+                self.assertIn("BLITZ", catalog["unavailable_product_types"])
+                eurusd = next(item for item in catalog["items"] if item["symbol"] == "EURUSD")
+                self.assertEqual(eurusd["status"], "OPEN")
+                self.assertEqual(eurusd["payout_percent"], 87.0)
+                self.assertEqual(eurusd["rank"], 1)
+
+                candles = await connector.get_candles("EUR/USD", "1m", limit=30)
+                self.assertEqual(len(candles), 30)
+                self.assertGreater(candles[0]["timestamp"], 0)
+                self.assertEqual(candles[1]["timestamp"] - candles[0]["timestamp"], 60000)
+                self.assertEqual(candles[-1]["close"], 1.0834)
+
+                order = await connector.submit_order(
+                    "EUR/USD", "1m", "CALL", 50.0, 60, "corr_123"
+                )
+                self.assertEqual(order.status, "PENDING")
+                self.assertEqual(order.lifecycle_state, "PENDING")
+                self.assertEqual(order.broker_order_id, "87654321")
+                await connector.disconnect()
+                self.assertFalse(connector.connected)
+
         asyncio.run(run_test())
+
+    def test_iqoption_real_account_is_rejected_at_construction(self):
+        with self.assertRaisesRegex(ValueError, "Practice-only"):
+            IQOptionBrokerConnector(
+                email="practice@example.test",
+                password="unused",
+                balance_mode="REAL",
+            )
+
+    def test_iqoption_connector_never_authorizes_live(self):
+        connector = IQOptionBrokerConnector(balance_mode="PRACTICE")
+        self.assertFalse(connector.live_authorized)
+        self.assertIn("REAL_ACCOUNT_LOCKED", connector.get_capabilities())
 
 
 if __name__ == "__main__":

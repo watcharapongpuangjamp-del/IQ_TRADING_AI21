@@ -387,7 +387,14 @@ private fun LocalTradingShell(
                                 onTestBackend = viewModel::testBackendConnection,
                                 onSendTelegramTest = viewModel::sendTelegramTest,
                                 onSendLocalNotificationTest = viewModel::sendLocalNotificationTest,
-                                onUpdateTraderName = viewModel::updateLocalTraderName
+                                onUpdateTraderName = viewModel::updateLocalTraderName,
+                                savedIqOptionEmail = viewModel.savedIqOptionEmail,
+                                savedIqOptionPassword = viewModel.savedIqOptionPassword,
+                                practiceConnectionState = if (terminalState.sessionVerified && terminalState.accountMode == "PRACTICE") "CONNECTED" else if (terminalState.connectionState == "CONNECTING") "CONNECTING" else "DISCONNECTED",
+                                practiceSessionVerified = terminalState.sessionVerified && terminalState.accountMode == "PRACTICE",
+                                practiceBalance = terminalState.brokerBalance,
+                                onConnectPractice = viewModel::connectPracticeAccount,
+                                onDisconnectPractice = viewModel::disconnectPracticeAccount
                             )
                         }
                     }

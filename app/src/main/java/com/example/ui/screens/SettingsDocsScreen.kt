@@ -103,6 +103,13 @@ fun SettingsDocsScreen(
     onSendTelegramTest: () -> Unit,
     onSendLocalNotificationTest: () -> Unit,
     onUpdateTraderName: (String) -> Unit,
+    savedIqOptionEmail: String? = null,
+    savedIqOptionPassword: String? = null,
+    practiceConnectionState: String = "DISCONNECTED",
+    practiceSessionVerified: Boolean = false,
+    practiceBalance: Double? = null,
+    onConnectPractice: (email: String, password: String, remember: Boolean) -> Unit = { _, _, _ -> },
+    onDisconnectPractice: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
@@ -126,6 +133,10 @@ fun SettingsDocsScreen(
     ) { granted ->
         hasNotifPermission = granted
     }
+
+    var iqOptionEmail by remember(savedIqOptionEmail) { mutableStateOf(savedIqOptionEmail.orEmpty()) }
+    var iqOptionPassword by remember(savedIqOptionPassword) { mutableStateOf(savedIqOptionPassword.orEmpty()) }
+    var rememberIqCredentials by remember(savedIqOptionEmail) { mutableStateOf(!savedIqOptionEmail.isNullOrBlank()) }
 
     var backendUrl by remember(settings.backendBaseUrl) { mutableStateOf(settings.backendBaseUrl) }
     var wsUrl by remember(settings.backendWsUrl) { mutableStateOf(settings.backendWsUrl) }
@@ -185,6 +196,78 @@ fun SettingsDocsScreen(
                     )
                 }
             } else {
+        // IQ Option Practice account login and broker session controls.
+        item {
+            Surface(
+                color = tradingColors.surfaceElevated,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, tradingColors.cardBorder),
+                modifier = Modifier.fillMaxWidth().testTag("iqoption_practice_connector_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("IQ Option Account", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        "เชื่อมต่อบัญชี PRACTICE ผ่าน Python FastAPI Broker Connector • ไม่รองรับ REAL",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "สถานะ: $practiceConnectionState • Session verified: ${if (practiceSessionVerified) "YES" else "NO"}",
+                        color = if (practiceSessionVerified) tradingColors.bullish else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (practiceSessionVerified && practiceBalance != null) {
+                        Text("ยอดเงิน Practice จาก Broker: ${String.format(Locale.US, "%.2f", practiceBalance)}")
+                    }
+                    OutlinedTextField(
+                        value = iqOptionEmail,
+                        onValueChange = { iqOptionEmail = it },
+                        label = { Text("IQ Option Email") },
+                        singleLine = true,
+                        enabled = !practiceSessionVerified,
+                        modifier = Modifier.fillMaxWidth().testTag("iqoption_email_input")
+                    )
+                    OutlinedTextField(
+                        value = iqOptionPassword,
+                        onValueChange = { iqOptionPassword = it },
+                        label = { Text("Password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        enabled = !practiceSessionVerified,
+                        modifier = Modifier.fillMaxWidth().testTag("iqoption_password_input")
+                    )
+                    CheckOptionRow(
+                        "เข้ารหัสและบันทึกข้อมูลนี้ไว้ในโทรศัพท์ (Android Keystore)",
+                        rememberIqCredentials
+                    ) { rememberIqCredentials = it }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                onConnectPractice(iqOptionEmail.trim(), iqOptionPassword, rememberIqCredentials)
+                            },
+                            enabled = !practiceSessionVerified && iqOptionEmail.contains("@") && (iqOptionPassword.isNotBlank() || !savedIqOptionPassword.isNullOrBlank()),
+                            modifier = Modifier.weight(1f).height(48.dp).testTag("connect_iqoption_practice_button")
+                        ) { Text("Connect Practice") }
+                        OutlinedButton(
+                            onClick = { onDisconnectPractice() },
+                            enabled = practiceSessionVerified,
+                            modifier = Modifier.weight(1f).height(48.dp).testTag("disconnect_iqoption_practice_button")
+                        ) { Text("Disconnect") }
+                    }
+                    Text(
+                        "คำสั่งซื้อขายจะเปิดใช้ได้เฉพาะเมื่อ Backend ยืนยันบัญชี PRACTICE และ Session แล้วเท่านั้น",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
         // 1. Execution Mode Controller & FastAPI Hybrid Connector
         item {
             Surface(
@@ -211,9 +294,10 @@ fun SettingsDocsScreen(
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ExecutionMode.entries.forEach { mode ->
-                            val isLiveLocked = mode == ExecutionMode.LIVE && !liveReadiness.prerequisitesReady
+                            val isLiveLocked = mode == ExecutionMode.LIVE
                             FilterChip(
                                 selected = currentMode == mode,
+                                enabled = !isLiveLocked,
                                 onClick = {
                                     if (mode == ExecutionMode.LIVE) {
                                         selectedTab = 1
@@ -223,7 +307,7 @@ fun SettingsDocsScreen(
                                 },
                                 label = {
                                     Text(
-                                        text = if (isLiveLocked) "LIVE (Locked)" else mode.label,
+                                        text = if (isLiveLocked) "REAL (LOCKED)" else mode.label,
                                         style = MaterialTheme.typography.labelMedium
                                     )
                                 },
