@@ -211,9 +211,10 @@ fun SettingsDocsScreen(
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ExecutionMode.entries.forEach { mode ->
-                            val isLiveLocked = mode == ExecutionMode.LIVE && !liveReadiness.prerequisitesReady
+                            val isLiveLocked = mode == ExecutionMode.LIVE
                             FilterChip(
                                 selected = currentMode == mode,
+                                enabled = !isLiveLocked,
                                 onClick = {
                                     if (mode == ExecutionMode.LIVE) {
                                         selectedTab = 1
@@ -223,7 +224,7 @@ fun SettingsDocsScreen(
                                 },
                                 label = {
                                     Text(
-                                        text = if (isLiveLocked) "LIVE (Locked)" else mode.label,
+                                        text = if (isLiveLocked) "REAL (LOCKED)" else mode.label,
                                         style = MaterialTheme.typography.labelMedium
                                     )
                                 },
