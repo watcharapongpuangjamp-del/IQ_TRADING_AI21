@@ -58,6 +58,8 @@ class IQOptionBrokerConnector(BrokerConnector):
         self._orders: Dict[str, Dict[str, Any]] = {}
         self._lock = asyncio.Lock()
         self._sync_lock = threading.RLock()
+        self._metadata_cache = None
+        self._metadata_cached_at = 0.0
         # iqair stores request responses in shared mutable client fields; serialize calls.
 
     @property
@@ -203,10 +205,29 @@ class IQOptionBrokerConnector(BrokerConnector):
     async def get_asset_metadata(self) -> Dict[str, Any]:
         """Return iqair's unified six-category asset directory (read-only)."""
         await self._assert_practice()
+        if self._metadata_cache is not None and time.monotonic() - self._metadata_cached_at < 30:
+            return self._metadata_cache
         metadata = await self._run(self._client.get_asset_metadata)
         if not isinstance(metadata, dict):
             raise RuntimeError("IQ Option returned an invalid asset directory.")
+        self._metadata_cache = metadata
+        self._metadata_cached_at = time.monotonic()
         return metadata
+
+    async def get_payout_rate(self, instrument: str, expiry_seconds: int) -> float:
+        """Return the broker-reported payout for the selected turbo/binary contract."""
+        if expiry_seconds < 60 or expiry_seconds > 3600 or expiry_seconds % 60:
+            raise ValueError("Option expiry must be 60-3600 seconds in whole-minute increments.")
+        category = "turbo" if expiry_seconds <= 300 else "binary"
+        ticker = self._ticker(instrument)
+        metadata = await self.get_asset_metadata()
+        asset = metadata.get(category, {}).get(ticker)
+        if not asset or not asset.get("is_open"):
+            raise ValueError(f"{ticker} is not currently open for {category} trading.")
+        payout = asset.get("payout")
+        if payout is None or not 0.0 < float(payout) <= 1.0:
+            raise ValueError(f"IQ Option did not provide a valid payout for {ticker} ({category}).")
+        return float(payout)
 
     async def get_market_data(self, instrument: str) -> Dict[str, float]:
         candles = await self.get_candles(instrument, "1m", limit=2)
