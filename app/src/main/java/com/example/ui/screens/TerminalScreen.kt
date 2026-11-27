@@ -424,6 +424,15 @@ fun TerminalScreen(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (terminalState.assetCatalog.isNotEmpty()) {
+                        val openCount = terminalState.assetCatalog.count { it.status == "OPEN" }
+                        val closedCount = terminalState.assetCatalog.count { it.status == "CLOSED" }
+                        Text(
+                            "ทั้งหมด ${terminalState.assetCatalog.size} รายการ • OPEN $openCount • CLOSED $closedCount • UNKNOWN ${terminalState.assetCatalog.size - openCount - closedCount}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     if (terminalState.assetCatalog.isEmpty()) {
                         Text(
                             "ยังไม่มีรายการสินทรัพย์จาก Broker — รายการด้านบนเป็นรายการอ้างอิงของ Simulation เท่านั้น",
@@ -454,6 +463,9 @@ fun TerminalScreen(
                                         fontWeight = FontWeight.SemiBold
                                     )
                                     Text(statusLabel, style = MaterialTheme.typography.labelSmall, color = statusColor)
+                                }
+                                if (asset.displayName.isNotBlank() && !asset.displayName.equals(asset.symbol, ignoreCase = true)) {
+                                    Text(asset.displayName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                                 val payoutText = asset.payoutPercent?.let { "Payout ${String.format("%.2f", it)}%" } ?: "Payout N/A"
                                 val stakeText = listOfNotNull(
