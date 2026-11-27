@@ -170,6 +170,31 @@ class TradingViewModel(
         }
     }
 
+    fun forceReconnectPractice(email: String, password: String, rememberCredentials: Boolean) {
+        if (_selectedAccountType.value != AccountType.PRACTICE || _practiceBusy.value) return
+        viewModelScope.launch {
+            _practiceBusy.value = true
+            _practiceConnection.value = null
+            try {
+                val result = practiceService.forceReconnect(email, password, rememberCredentials)
+                _practiceConnection.value = result
+                _snackbarMessage.value = if (result.ok) {
+                    "รีเซ็ต Session บนอุปกรณ์นี้และเชื่อมต่อ Practice ใหม่สำเร็จ"
+                } else {
+                    "Force Reconnect ไม่สำเร็จ: ${result.error ?: result.state}"
+                }
+            } catch (error: Exception) {
+                _practiceConnection.value = PracticeConnectionResult(
+                    ok = false, state = "ERROR",
+                    error = error.localizedMessage ?: "Force reconnect failed"
+                )
+                _snackbarMessage.value = "Force Reconnect ไม่สำเร็จ"
+            } finally {
+                _practiceBusy.value = false
+            }
+        }
+    }
+
     fun disconnectPractice() {
         if (_practiceBusy.value) return
         viewModelScope.launch {
