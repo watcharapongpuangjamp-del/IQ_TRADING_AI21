@@ -527,7 +527,7 @@ fun PnLDashboardScreen(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "${accountModeLabel} • ${trade.strategyName} • Conf ${trade.confidenceScore}%",
+                                text = "${accountModeLabel} • Stake ${String.format("%.2f", trade.amount)} • Payout ${String.format("%.2f", trade.payoutRate * 100)}% • ${trade.strategyName} • Conf ${trade.confidenceScore}%",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
