@@ -381,6 +381,7 @@ private fun LocalTradingShell(
                                 practiceBusy = practiceBusy,
                                 onConnectPractice = viewModel::connectPractice,
                                 onDisconnectPractice = viewModel::disconnectPractice,
+                                onForceReconnectPractice = viewModel::forceReconnectPractice,
                                 onClearSavedPracticeCredentials = viewModel::clearSavedPracticeCredentials,
                                 userProfile = userProfile,
                                 databaseStats = databaseStats,
