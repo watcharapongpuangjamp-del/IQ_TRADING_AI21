@@ -36,6 +36,7 @@ class PracticeReadOnlyGateway:
         self._client: Any | None = None
         self._state = "DISCONNECTED"
         self._poisoned = False
+        self._pending_order_id: str | None = None
 
     @property
     def state(self) -> str:
@@ -133,7 +134,7 @@ class PracticeReadOnlyGateway:
                     raise GatewayError("Broker returned an invalid balance.")
 
                 self._client = client
-                self._state = "CONNECTED_READ_ONLY"
+                self._state = "CONNECTED_PRACTICE"
                 return ReadOnlySnapshot("PRACTICE", amount, currency.strip(), str(selected_id))
             except Exception:
                 if client is not None and not self._poisoned:
@@ -169,8 +170,130 @@ class PracticeReadOnlyGateway:
                 self._bounded(client.api.close, "force-reconnect-disconnect")
             self._state = "DISCONNECTED"
 
+
+    def submit_practice_order(
+        self, asset: str, direction: str, amount: float, expiry_minutes: int
+    ) -> dict[str, Any]:
+        """Place and settle one Turbo Practice order; ambiguous outcomes lock trading."""
+        from iqair.broker import TradeMode, TradeSide
+
+        if not isinstance(asset, str) or not asset.strip():
+            raise GatewayError("Asset is required.")
+        direction = str(direction).strip().upper()
+        if direction not in {"CALL", "PUT"}:
+            raise GatewayError("Direction must be CALL or PUT.")
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise GatewayError("Stake must be numeric.") from exc
+        if not isfinite(amount) or amount <= 0:
+            raise GatewayError("Stake must be greater than zero.")
+        if type(expiry_minutes) is not int or expiry_minutes not in {1, 5}:
+            raise GatewayError("Practice test supports 1- or 5-minute expiry only.")
+
+        with self._lock:
+            if self._poisoned or self._state != "CONNECTED_PRACTICE":
+                raise GatewayError("A verified Practice session is required.")
+            if self._pending_order_id is not None:
+                raise GatewayError(
+                    "An order has an unresolved outcome; reconcile it before another order."
+                )
+            client = self._client
+            if client is None:
+                raise GatewayError("Practice client is not connected.")
+
+            mode = self._bounded(client.get_balance_mode, "pre-order-account-mode")
+            if str(mode).strip().upper() != "PRACTICE":
+                raise GatewayError("Practice verification failed; order blocked.")
+            balance_before = float(self._bounded(client.get_balance, "pre-order-balance"))
+            if not isfinite(balance_before) or balance_before < amount:
+                raise GatewayError("Stake exceeds the verified Practice balance.")
+
+            side = TradeSide.CALL if direction == "CALL" else TradeSide.PUT
+            try:
+                trade = self._bounded(
+                    lambda: client.broker.trade(
+                        mode=TradeMode.TURBO,
+                        asset=asset.strip(),
+                        side=side,
+                        amount=amount,
+                        expiration=expiry_minutes,
+                    ),
+                    "place-practice-order",
+                )
+            except Exception:
+                # A timeout/error can occur after the broker accepted the order.
+                self._pending_order_id = "UNKNOWN"
+                self._state = "ORDER_UNKNOWN"
+                raise
+
+            order_id = str(getattr(trade, "order_id", "") or "")
+            if not order_id:
+                self._pending_order_id = "UNKNOWN"
+                self._state = "ORDER_UNKNOWN"
+                raise GatewayError("Broker returned no order ID; trading is locked.")
+
+            self._pending_order_id = order_id
+            self._state = "ORDER_PENDING"
+            try:
+                settled = self._bounded(
+                    lambda: trade.wait(timeout=expiry_minutes * 60 + 45, poll_interval=1),
+                    "wait-practice-settlement",
+                )
+                state_obj = getattr(settled, "trade_state", None)
+                broker_state = str(getattr(state_obj, "value", state_obj)).lower()
+                if broker_state not in {"won", "lost", "sold", "expired"}:
+                    raise GatewayError("Broker has not confirmed a terminal result.")
+
+                pnl_value = getattr(settled, "pnl_net", None)
+                if pnl_value is None:
+                    pnl_value = getattr(settled, "pnl", None)
+                if pnl_value is None:
+                    raise GatewayError("Broker settlement omitted realized P&L.")
+                pnl = float(pnl_value)
+                if not isfinite(pnl):
+                    raise GatewayError("Broker returned invalid realized P&L.")
+
+                balance_after = float(self._bounded(client.get_balance, "post-order-balance"))
+                if not isfinite(balance_after) or balance_after < 0:
+                    raise GatewayError("Broker returned invalid post-trade balance.")
+
+                if broker_state == "won":
+                    outcome = "WIN"
+                elif broker_state == "lost":
+                    outcome = "LOSS"
+                elif abs(pnl) < 1e-9:
+                    outcome = "DRAW"
+                else:
+                    outcome = "WIN" if pnl > 0 else "LOSS"
+
+                result = {
+                    "ok": True,
+                    "orderId": order_id,
+                    "asset": asset.strip(),
+                    "direction": direction,
+                    "amount": amount,
+                    "expiryMinutes": expiry_minutes,
+                    "brokerState": broker_state.upper(),
+                    "outcome": outcome,
+                    "pnl": pnl,
+                    "balanceBefore": balance_before,
+                    "balanceAfter": balance_after,
+                    "balanceDelta": balance_after - balance_before,
+                    "accountType": "PRACTICE",
+                    "source": "BROKER_CONFIRMED",
+                }
+                self._pending_order_id = None
+                self._state = "CONNECTED_PRACTICE"
+                return result
+            except Exception:
+                # Never auto-retry an order with an unknown settlement outcome.
+                self._state = "ORDER_UNKNOWN"
+                raise
+
     def submit_order(self, *_: Any, **__: Any) -> None:
-        raise GatewayError("Order submission is disabled in this read-only integration stage.")
+        raise GatewayError("Use submit_practice_order with explicit Practice verification.")
+
 
     def switch_account(self, *_: Any, **__: Any) -> None:
         raise GatewayError("Account switching is disabled; disconnect before reconnecting.")
