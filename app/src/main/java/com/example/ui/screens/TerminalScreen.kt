@@ -469,7 +469,7 @@ fun TerminalScreen(
                             }
                         }
                     }
-                    if (terminalState.unavailableAssetTypes.isNotEmpty()) {
+                    if (terminalState.accountMode == "PRACTICE" && terminalState.unavailableAssetTypes.isNotEmpty()) {
                         Text(
                             "ยังไม่พบใน API: ${terminalState.unavailableAssetTypes.joinToString()} — ไม่เปิดให้ส่งคำสั่ง",
                             style = MaterialTheme.typography.labelSmall,
