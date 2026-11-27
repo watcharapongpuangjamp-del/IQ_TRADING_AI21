@@ -192,12 +192,14 @@ class PracticeReadOnlyGateway:
             raise GatewayError("Practice test supports 1- or 5-minute expiry only.")
 
         with self._lock:
-            if self._poisoned or self._state != "CONNECTED_PRACTICE":
-                raise GatewayError("A verified Practice session is required.")
+            if self._poisoned:
+                raise GatewayError("Session is poisoned; restart the app before retrying.")
             if self._pending_order_id is not None:
                 raise GatewayError(
                     "An order has an unresolved outcome; reconcile it before another order."
                 )
+            if self._state != "CONNECTED_PRACTICE":
+                raise GatewayError("A verified Practice session is required.")
             client = self._client
             if client is None:
                 raise GatewayError("Practice client is not connected.")
