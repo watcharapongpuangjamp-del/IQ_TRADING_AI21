@@ -96,6 +96,20 @@ class SecureCredentialVault(context: Context) {
         }
     }
 
+    fun saveIqOptionCredentials(email: String, password: String) {
+        storeEncryptedSecret(KEY_IQOPTION_EMAIL, email.trim())
+        storeEncryptedSecret(KEY_IQOPTION_PASSWORD, password)
+    }
+
+    fun getIqOptionEmail(): String? = readEncryptedSecret(KEY_IQOPTION_EMAIL)
+
+    fun getIqOptionPassword(): String? = readEncryptedSecret(KEY_IQOPTION_PASSWORD)
+
+    fun clearIqOptionCredentials() {
+        removeEncryptedSecret(KEY_IQOPTION_EMAIL)
+        removeEncryptedSecret(KEY_IQOPTION_PASSWORD)
+    }
+
     fun getBackendToken(): String? = readEncryptedSecret(KEY_BACKEND_TOKEN)
 
     fun getTelegramBotToken(): String? = readEncryptedSecret(KEY_TELEGRAM_TOKEN)
@@ -161,6 +175,8 @@ class SecureCredentialVault(context: Context) {
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val PREFS_NAME = "iq_trading_secure_vault"
         const val KEY_BACKEND_TOKEN = "enc_backend_token"
+        const val KEY_IQOPTION_EMAIL = "enc_iqoption_email"
+        const val KEY_IQOPTION_PASSWORD = "enc_iqoption_password"
         const val KEY_TELEGRAM_TOKEN = "enc_telegram_bot_token"
     }
 }
