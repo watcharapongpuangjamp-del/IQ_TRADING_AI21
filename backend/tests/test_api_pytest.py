@@ -325,6 +325,9 @@ def test_order_lifecycle_10_states_audit_events(client: TestClient) -> None:
 
 
 def test_unknown_timeout_never_resubmits_and_blocks_new_orders_until_reconciled(client: TestClient) -> None:
+    policy = client.get("/api/v1/risk/policy").json()
+    policy["cooldown_minutes"] = 0
+    assert client.put("/api/v1/risk/policy", json=policy).status_code == 200
     connector = client.app.state.connector
     connector.queue_simulation_behavior("TIMEOUT", persistent_unknown=True)
 
@@ -397,6 +400,9 @@ def test_unknown_timeout_never_resubmits_and_blocks_new_orders_until_reconciled(
 
 
 def test_pending_order_auto_reconciles_before_new_trade_without_double_counting(client: TestClient) -> None:
+    policy = client.get("/api/v1/risk/policy").json()
+    policy["cooldown_minutes"] = 0
+    assert client.put("/api/v1/risk/policy", json=policy).status_code == 200
     connector = client.app.state.connector
     connector.queue_simulation_behavior("PENDING")
 
