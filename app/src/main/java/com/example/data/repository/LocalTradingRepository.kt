@@ -179,7 +179,7 @@ class LocalTradingRepository(
                 instrument = trade.instrument.trim().take(20).ifBlank { "EUR/USD" },
                 timeframe = Timeframe.fromCode(trade.timeframe).code,
                 direction = if (trade.direction == TradeDirection.PUT.name) "PUT" else "CALL",
-                mode = ExecutionMode.safeValueOf(trade.mode).name,
+                mode = if (trade.mode == "PRACTICE") "PRACTICE" else ExecutionMode.safeValueOf(trade.mode).name,
                 amount = trade.amount.coerceIn(1.0, 100_000.0),
                 payoutRate = trade.payoutRate.coerceIn(0.1, 2.0),
                 entryPrice = trade.entryPrice.coerceAtLeast(0.00001),
