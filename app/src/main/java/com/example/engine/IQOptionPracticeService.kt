@@ -54,6 +54,35 @@ class IQOptionPracticeService(context: Context) {
         parseResult(bridge.connectPracticeReadOnly(email, password))
     }
 
+
+    suspend fun executePracticeTrade(
+        asset: String,
+        direction: String,
+        amount: Double,
+        expiryMinutes: Int
+    ): PracticeTradeResult = withContext(Dispatchers.IO) {
+        require(asset.isNotBlank()) { "Asset is required." }
+        require(direction == "CALL" || direction == "PUT") { "Direction must be CALL or PUT." }
+        require(amount > 0.0 && amount.isFinite()) { "Stake must be positive and finite." }
+        require(expiryMinutes == 1 || expiryMinutes == 5) { "Expiry must be 1 or 5 minutes." }
+        val json = JSONObject(bridge.submitPracticeOrder(asset, direction, amount, expiryMinutes))
+        PracticeTradeResult(
+            ok = json.optBoolean("ok", false),
+            orderId = json.optString("orderId").takeIf { it.isNotBlank() },
+            asset = json.optString("asset").takeIf { it.isNotBlank() },
+            direction = json.optString("direction").takeIf { it.isNotBlank() },
+            amount = json.optDouble("amount").takeIf { json.has("amount") && !json.isNull("amount") },
+            outcome = json.optString("outcome").takeIf { it.isNotBlank() },
+            pnl = json.optDouble("pnl").takeIf { json.has("pnl") && !json.isNull("pnl") },
+            balanceBefore = json.optDouble("balanceBefore").takeIf { json.has("balanceBefore") && !json.isNull("balanceBefore") },
+            balanceAfter = json.optDouble("balanceAfter").takeIf { json.has("balanceAfter") && !json.isNull("balanceAfter") },
+            balanceDelta = json.optDouble("balanceDelta").takeIf { json.has("balanceDelta") && !json.isNull("balanceDelta") },
+            accountType = json.optString("accountType").takeIf { it.isNotBlank() },
+            source = json.optString("source").takeIf { it.isNotBlank() },
+            error = json.optString("error").takeIf { it.isNotBlank() }
+        )
+    }
+
     suspend fun disconnect(): PracticeConnectionResult = withContext(Dispatchers.IO) {
         parseResult(bridge.disconnectIqOption())
     }
@@ -84,4 +113,21 @@ data class PracticeConnectionResult(
     val accountId: String? = null,
     val error: String? = null,
     val ordersEnabled: Boolean = false
+)
+
+
+data class PracticeTradeResult(
+    val ok: Boolean,
+    val orderId: String? = null,
+    val asset: String? = null,
+    val direction: String? = null,
+    val amount: Double? = null,
+    val outcome: String? = null,
+    val pnl: Double? = null,
+    val balanceBefore: Double? = null,
+    val balanceAfter: Double? = null,
+    val balanceDelta: Double? = null,
+    val accountType: String? = null,
+    val source: String? = null,
+    val error: String? = null
 )
