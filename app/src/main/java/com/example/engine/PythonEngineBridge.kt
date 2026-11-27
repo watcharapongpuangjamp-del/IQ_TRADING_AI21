@@ -40,6 +40,17 @@ class PythonEngineBridge(context: Context) {
     fun forceReconnectIqOption(): String =
         python().getModule("iq_engine.iqair_adapter").callAttr("force_reconnect_json").toString()
 
+
+    /** Execute one guarded Turbo order on a verified Practice account only. */
+    fun submitPracticeOrder(asset: String, direction: String, amount: Double, expiryMinutes: Int): String {
+        require(asset.isNotBlank()) { "Asset is required." }
+        require(direction == "CALL" || direction == "PUT") { "Direction must be CALL or PUT." }
+        require(amount > 0.0 && amount.isFinite()) { "Stake must be positive and finite." }
+        require(expiryMinutes == 1 || expiryMinutes == 5) { "Expiry must be 1 or 5 minutes." }
+        return python().getModule("iq_engine.iqair_adapter")
+            .callAttr("submit_practice_order_json", asset, direction, amount, expiryMinutes).toString()
+    }
+
     fun disconnectIqOption(): String =
         python().getModule("iq_engine.iqair_adapter").callAttr("disconnect_json").toString()
 
