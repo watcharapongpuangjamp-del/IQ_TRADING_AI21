@@ -21,7 +21,7 @@ enum class TradeDirection {
 }
 
 enum class TradeStatus {
-    OPEN, WON, LOST, REJECTED, CANCELLED, PENDING, FAILED, UNKNOWN;
+    OPEN, WON, LOST, DRAW, REJECTED, CANCELLED, PENDING, FAILED, UNKNOWN;
 
     companion object {
         fun safeValueOf(raw: String?): TradeStatus =
