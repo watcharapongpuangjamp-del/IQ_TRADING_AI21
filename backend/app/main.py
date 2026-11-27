@@ -212,7 +212,10 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(verify_bearer_token)],
         tags=["IQ Option Practice"],
     )
-    async def connect_iqoption_practice(payload: IQOptionConnectRequest) -> IQOptionConnectResponse:
+    async def connect_iqoption_practice(
+        payload: IQOptionConnectRequest,
+        db: Session = Depends(get_db),
+    ) -> IQOptionConnectResponse:
         if not isinstance(connector, IQOptionBrokerConnector):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -221,6 +224,10 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         try:
             await connector.connect_with_credentials(payload.email, payload.password)
             balance = await connector.get_balance()
+            # Persist only the selected execution mode; credentials remain in-memory.
+            state = TradeExecutionEngine.get_or_create_state(db)
+            state.execution_mode = ExecutionMode.DEMO.value
+            db.commit()
             return IQOptionConnectResponse(
                 connected=True,
                 account_mode="PRACTICE",
@@ -243,9 +250,12 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(verify_bearer_token)],
         tags=["IQ Option Practice"],
     )
-    async def disconnect_iqoption_practice() -> Dict[str, object]:
+    async def disconnect_iqoption_practice(db: Session = Depends(get_db)) -> Dict[str, object]:
         if isinstance(connector, IQOptionBrokerConnector):
             await connector.disconnect()
+        state = TradeExecutionEngine.get_or_create_state(db)
+        state.execution_mode = ExecutionMode.SIMULATION.value
+        db.commit()
         return {
             "connected": False,
             "account_mode": "DISCONNECTED",
@@ -946,7 +956,9 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         state = TradeExecutionEngine.get_or_create_state(db)
         policy = TradeExecutionEngine.get_or_create_policy(db)
         summary = TradeExecutionEngine.get_or_create_daily_summary(db)
-        balance = await connector.get_balance()
+        balance = await connector.get_balance() if connector.connected else (
+            10000.0 if isinstance(connector, SimulationConnector) else 0.0
+        )
         win_rate = round((summary.wins / summary.total_trades) * 100.0, 2) if summary.total_trades > 0 else 0.0
         execution_mode = ExecutionMode(state.execution_mode)
         session_verified = bool(getattr(connector, "session_verified", False))
