@@ -513,6 +513,7 @@ data class ModePerformanceSummary(
     val totalTrades: Int = 0,
     val wins: Int = 0,
     val losses: Int = 0,
+    val draws: Int = 0,
     val winRatePct: Double = 0.0,
     val netPnl: Double = 0.0,
     val grossProfit: Double = 0.0,
