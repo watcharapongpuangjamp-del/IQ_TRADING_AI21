@@ -651,3 +651,35 @@ def test_phase10_broker_dry_run_endpoint_and_auth_isolation(
     )
     assert auth_res.status_code == 200
     assert auth_res.json()["simulation_locked"] is True
+
+
+def test_latency_summary_and_connection_status_are_explicit(client: TestClient) -> None:
+    status_res = client.get("/api/v1/connection/status")
+    assert status_res.status_code == 200
+    status_data = status_res.json()
+    assert status_data["connection_state"] == "DISCONNECTED"
+    assert status_data["session_verified"] is False
+
+    summary_res = client.get("/api/v1/latency/summary", params={"window": "5m"})
+    assert summary_res.status_code == 200
+    body = summary_res.json()
+    assert body["window"] == "5m"
+    assert body["metrics"]["backend_processing"]["available"] is False
+    assert body["metrics"]["broker_rtt"]["available"] is False
+    assert body["broker_rtt_status"] == "NOT_MEASURED"
+
+
+def test_latency_history_is_bounded_and_empty_when_not_measured(client: TestClient) -> None:
+    res = client.get("/api/v1/latency/history", params={"metric": "broker_rtt", "limit": 20})
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_latency_endpoints_require_bearer_token_when_configured(secured_client: TestClient) -> None:
+    res = secured_client.get("/api/v1/latency/summary")
+    assert res.status_code == 401
+    authorized = secured_client.get(
+        "/api/v1/latency/summary",
+        headers={"Authorization": "Bearer test-secret-token-12345"},
+    )
+    assert authorized.status_code == 200
