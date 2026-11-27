@@ -339,6 +339,7 @@ fun PnLDashboardScreen(
                 val statusEnum = TradeStatus.safeValueOf(trade.status)
                 val statusColor = when (statusEnum) {
                     TradeStatus.WON -> tradingColors.bullish
+                    TradeStatus.DRAW -> tradingColors.cyan
                     TradeStatus.LOST, TradeStatus.REJECTED, TradeStatus.FAILED -> tradingColors.bearish
                     TradeStatus.OPEN -> tradingColors.cyan
                     TradeStatus.CANCELLED, TradeStatus.PENDING, TradeStatus.UNKNOWN -> tradingColors.warning
