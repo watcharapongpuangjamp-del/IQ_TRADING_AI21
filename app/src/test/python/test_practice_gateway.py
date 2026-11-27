@@ -108,6 +108,30 @@ class PracticeGatewayTests(unittest.TestCase):
                 with self.assertRaises(GatewayError):
                     gateway.connect_readonly("user", "secret")
 
+    def test_force_reconnect_closes_current_device_session_and_resets_gateway(self):
+        clients = []
+        def factory(email, password):
+            client = FakeClient(email, password)
+            clients.append(client)
+            return client
+        gateway = PracticeReadOnlyGateway(factory)
+        gateway.connect_readonly("user", "secret")
+        gateway.force_reconnect()
+        self.assertEqual(clients[0].api.closed, 1)
+        self.assertEqual(gateway.state, "DISCONNECTED")
+        gateway.connect_readonly("user", "secret")
+        self.assertEqual(gateway.state, "CONNECTED_READ_ONLY")
+
+    def test_force_reconnect_recovers_clean_error_state(self):
+        gateway = PracticeReadOnlyGateway(
+            lambda email, password: FakeClient(email, password, mode="REAL", balance_type=1)
+        )
+        with self.assertRaises(GatewayError):
+            gateway.connect_readonly("user", "secret")
+        self.assertEqual(gateway.state, "ERROR")
+        gateway.force_reconnect()
+        self.assertEqual(gateway.state, "DISCONNECTED")
+
     def test_order_submission_is_disabled(self):
         gateway = PracticeReadOnlyGateway(FakeClient)
         with self.assertRaises(GatewayError):
