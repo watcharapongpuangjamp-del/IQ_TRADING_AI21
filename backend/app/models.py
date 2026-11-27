@@ -140,3 +140,19 @@ class ModelRegistryModel(Base):
     rolled_back_from_model_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class LatencySampleModel(Base):
+    __tablename__ = "latency_samples"
+    __table_args__ = (Index("ix_latency_metric_recorded", "metric_name", "recorded_at"),)
+
+    sample_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True, nullable=False)
+    metric_name: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    timed_out: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    source: Mapped[str] = mapped_column(String(40), default="backend_middleware", nullable=False)
+    connector: Mapped[str] = mapped_column(String(80), default="unknown", nullable=False)
+    account_mode: Mapped[str] = mapped_column(String(20), default="UNKNOWN", nullable=False)
+    connection_generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
