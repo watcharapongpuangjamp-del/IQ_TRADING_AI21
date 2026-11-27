@@ -62,20 +62,19 @@ class ExecutionModeController:
             return True, "SIMULATION mode authorized."
 
         if requested_mode == ExecutionMode.DEMO:
-            if "DEMO_ORDERS" in connector.get_capabilities() or "PAPER_ORDERS" in connector.get_capabilities():
-                return True, "DEMO/Paper mode authorized on current connector."
-            return False, "Connected broker does not declare DEMO order support."
+            capabilities = connector.get_capabilities()
+            if "DEMO_ORDERS" not in capabilities and "PAPER_ORDERS" not in capabilities:
+                return False, "Connected broker does not declare DEMO order support."
+            if not connector.connected:
+                return False, "Broker connector must be connected before DEMO execution."
+            if "PRACTICE_ACCOUNT_ONLY" in capabilities and not bool(getattr(connector, "session_verified", False)):
+                return False, "IQ Option Practice account session is not verified."
+            if "PRACTICE_ACCOUNT_ONLY" in capabilities and getattr(connector, "account_mode", None) != "PRACTICE":
+                return False, "IQ Option REAL account is locked; only verified PRACTICE is permitted."
+            return True, "DEMO/PRACTICE mode authorized."
 
         if requested_mode == ExecutionMode.LIVE:
-            if not allow_live_trading:
-                return False, "LIVE trading is disabled by server policy (ALLOW_LIVE_TRADING=false)."
-            if not connector.live_authorized:
-                return False, f"Connector '{connector.name}' is not authorized for LIVE execution."
-            if not explicit_live_confirmation:
-                return False, "Explicit human owner confirmation is required for LIVE trading."
-            if not connector.connected:
-                return False, "Broker connector must be connected before LIVE execution."
-            return True, "LIVE mode authorized."
+            return False, "LIVE/REAL trading is hard-locked by project policy. Only SIMULATION or verified PRACTICE is permitted."
 
         return False, f"Unsupported execution mode: {requested_mode}"
 
