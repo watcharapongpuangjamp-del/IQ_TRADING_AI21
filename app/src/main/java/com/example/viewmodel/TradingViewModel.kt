@@ -1739,6 +1739,16 @@ class TradingViewModel(
                 localRepository.updateUserBalanceAndMode(
                     currentUserId, localSimulationBalance, ExecutionMode.DEMO, markSavedTimestamp = true
                 )
+                _backendHealth.update {
+                    it.copy(
+                        connected = true,
+                        checking = false,
+                        connectorName = connected.connector,
+                        supportedCapabilities = it.supportedCapabilities + "PRACTICE_ACCOUNT_ONLY",
+                        liveAuthorized = false,
+                        statusMessage = "IQ Option Practice session verified"
+                    )
+                }
                 _terminalState.update {
                     it.copy(
                         accountMode = "PRACTICE",
