@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.model.BackendHealthState
 import com.example.broker.AccountType
+import com.example.engine.PracticeConnectionResult
 import com.example.model.ExecutionMode
 import com.example.model.IntegrationSettings
 import com.example.model.LiveReadinessReport
@@ -79,6 +80,11 @@ import java.util.Locale
 fun SettingsDocsScreen(
     selectedAccountType: AccountType = AccountType.PRACTICE,
     onSelectAccountType: (AccountType) -> Unit = {},
+    practiceConnection: PracticeConnectionResult? = null,
+    practiceBusy: Boolean = false,
+    onConnectPractice: (String, String, Boolean) -> Unit = { _, _, _ -> },
+    onDisconnectPractice: () -> Unit = {},
+    onClearSavedPracticeCredentials: () -> Unit = {},
     userProfile: UserProfile?,
     databaseStats: LocalDatabaseStats,
     settings: IntegrationSettings,
@@ -113,6 +119,9 @@ fun SettingsDocsScreen(
     val currentMode = ExecutionMode.safeValueOf(userProfile?.executionMode)
     var selectedTab by remember { mutableIntStateOf(0) }
     var accountTypeMenuExpanded by remember { mutableStateOf(false) }
+    var brokerEmail by rememberSaveable { mutableStateOf("") }
+    var brokerPassword by rememberSaveable { mutableStateOf("") }
+    var rememberBrokerCredentials by rememberSaveable { mutableStateOf(false) }
     var traderNameInput by remember(userProfile?.displayName) {
         mutableStateOf(userProfile?.displayName ?: "Local Trader")
     }
@@ -256,6 +265,98 @@ fun SettingsDocsScreen(
                         } else {
                             tradingColors.warning
                         }
+                    )
+                }
+            }
+        }
+
+        item {
+            Surface(
+                color = tradingColors.surfaceElevated,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, tradingColors.cardBorder),
+                modifier = Modifier.fillMaxWidth().testTag("iq_practice_connection_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("IQ Option — On-device Practice Connection", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "เชื่อมต่อผ่าน Python Engine ที่ฝังใน APK โดยตรง ใช้ได้เฉพาะ Practice และอ่านข้อมูลบัญชีเท่านั้น",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = brokerEmail,
+                        onValueChange = { brokerEmail = it },
+                        label = { Text("IQ Option Email") },
+                        singleLine = true,
+                        enabled = !practiceBusy,
+                        modifier = Modifier.fillMaxWidth().testTag("iq_practice_email")
+                    )
+                    OutlinedTextField(
+                        value = brokerPassword,
+                        onValueChange = { brokerPassword = it },
+                        label = { Text("Password") },
+                        singleLine = true,
+                        enabled = !practiceBusy,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth().testTag("iq_practice_password")
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = rememberBrokerCredentials,
+                            onCheckedChange = { rememberBrokerCredentials = it },
+                            enabled = !practiceBusy
+                        )
+                        Text("เข้ารหัสและบันทึกข้อมูลนี้ไว้ในโทรศัพท์")
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { onConnectPractice(brokerEmail.trim(), brokerPassword, rememberBrokerCredentials) },
+                            enabled = !practiceBusy && brokerEmail.isNotBlank() && brokerPassword.isNotEmpty() &&
+                                selectedAccountType == AccountType.PRACTICE,
+                            modifier = Modifier.weight(1f).testTag("iq_practice_connect")
+                        ) { Text(if (practiceBusy) "กำลังเชื่อมต่อ…" else "Connect Practice") }
+                        OutlinedButton(
+                            onClick = onDisconnectPractice,
+                            enabled = !practiceBusy && practiceConnection?.ok == true,
+                            modifier = Modifier.testTag("iq_practice_disconnect")
+                        ) { Text("Disconnect") }
+                    }
+                    if (rememberBrokerCredentials) {
+                        OutlinedButton(
+                            onClick = onClearSavedPracticeCredentials,
+                            enabled = !practiceBusy,
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("ลบข้อมูลเข้าสู่ระบบที่บันทึกไว้") }
+                    }
+                    practiceConnection?.let { result ->
+                        Surface(
+                            color = if (result.ok) tradingColors.cyanContainer else tradingColors.bearishContainer,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(if (result.ok) "สถานะ: เชื่อมต่อแล้ว" else "สถานะ: เชื่อมต่อไม่สำเร็จ",
+                                    fontWeight = FontWeight.SemiBold)
+                                if (result.ok) {
+                                    Text("บัญชี: ${result.accountType ?: "PRACTICE"}")
+                                    result.balance?.let { balance ->
+                                        Text("ยอดเงินที่โบรกเกอร์รายงาน: ${String.format(Locale.US, "%.2f", balance)} ${result.currency.orEmpty()}")
+                                    }
+                                    Text("ส่งคำสั่งซื้อขาย: ปิดใช้งาน (Read-only)")
+                                } else {
+                                    Text(result.error ?: result.state)
+                                }
+                            }
+                        }
+                    }
+                    Text(
+                        "หมายเหตุ: อย่าส่งรหัสผ่านผ่านแชต ข้อมูลจะถูกส่งจากแอปไปยังผู้ให้บริการโดยตรงเมื่อกด Connect",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
