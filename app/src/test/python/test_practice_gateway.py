@@ -1,6 +1,7 @@
 import math
 import time
 import unittest
+from types import SimpleNamespace
 
 from iq_engine.practice_gateway import GatewayError, PracticeReadOnlyGateway
 
@@ -25,6 +26,7 @@ class FakeClient:
         self.currency = currency
         self.selected_id = selected_id
         self.api = FakeApi()
+        self.broker = None
 
     def connect(self):
         if self.delay:
@@ -131,6 +133,50 @@ class PracticeGatewayTests(unittest.TestCase):
         self.assertEqual(gateway.state, "ERROR")
         gateway.force_reconnect()
         self.assertEqual(gateway.state, "DISCONNECTED")
+
+
+    def test_practice_order_requires_verified_practice_and_settles(self):
+        gateway = PracticeReadOnlyGateway(FakeClient)
+        client_snapshot = gateway.connect_readonly("user", "secret")
+        # Replace only the test client's broker interface with a deterministic fake.
+        class FakeTrade:
+            order_id = "order-123"
+            def wait(self, timeout=None, poll_interval=1):
+                return SimpleNamespace(
+                    trade_state=SimpleNamespace(value="won"),
+                    pnl_net=8.5,
+                )
+        class FakeBroker:
+            def trade(self, **kwargs):
+                self.kwargs = kwargs
+                return FakeTrade()
+        gateway._client.broker = FakeBroker()
+        result = gateway.submit_practice_order("EURUSD", "CALL", 10, 1)
+        self.assertEqual(result["orderId"], "order-123")
+        self.assertEqual(result["outcome"], "WIN")
+        self.assertEqual(result["pnl"], 8.5)
+        self.assertEqual(result["balanceBefore"], 10000.0)
+        self.assertEqual(result["balanceAfter"], 10000.0)
+        self.assertEqual(result["source"], "BROKER_CONFIRMED")
+        self.assertEqual(gateway.state, "CONNECTED_PRACTICE")
+        gateway.disconnect()
+
+    def test_ambiguous_order_result_locks_additional_orders(self):
+        gateway = PracticeReadOnlyGateway(FakeClient)
+        gateway.connect_readonly("user", "secret")
+        class FakeTrade:
+            order_id = "order-ambiguous"
+            def wait(self, timeout=None, poll_interval=1):
+                raise TimeoutError("not settled")
+        class FakeBroker:
+            def trade(self, **kwargs):
+                return FakeTrade()
+        gateway._client.broker = FakeBroker()
+        with self.assertRaises(GatewayError):
+            gateway.submit_practice_order("EURUSD", "PUT", 10, 1)
+        self.assertEqual(gateway.state, "ORDER_UNKNOWN")
+        with self.assertRaisesRegex(GatewayError, "unresolved outcome"):
+            gateway.submit_practice_order("EURUSD", "CALL", 10, 1)
 
     def test_order_submission_is_disabled(self):
         gateway = PracticeReadOnlyGateway(FakeClient)
