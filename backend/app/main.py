@@ -172,7 +172,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             path = request.url.path
             if path not in {"/api/v1/latency/summary", "/api/v1/latency/history", "/api/v1/connection/status", "/api/v1/health"} and path.startswith("/api/"):
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
-                db_session = SessionLocal()
+                db_session, db_generator = _open_ws_db()
                 try:
                     state = db_session.get(TradingStateModel, 1)
                     db_session.add(LatencySampleModel(
@@ -191,7 +191,7 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                 except Exception:
                     db_session.rollback()
                 finally:
-                    db_session.close()
+                    db_generator.close()
 
     @application.get(
         "/api/v1/connection/status",
