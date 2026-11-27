@@ -84,6 +84,18 @@ def disconnect_json() -> str:
                    "error": str(exc)[:240], "ordersEnabled": False}
     return json.dumps(payload, separators=(",", ":"))
 
+def force_reconnect_json() -> str:
+    """Reset only the session owned by this app; never revoke broker sessions elsewhere."""
+    try:
+        _get_gateway().force_reconnect()
+        payload = {"ok": True, "state": _get_gateway().state, "scope": "THIS_DEVICE_ONLY",
+                   "remoteSessionsRevoked": False, "ordersEnabled": False}
+    except Exception as exc:
+        payload = {"ok": False, "state": _GATEWAY.state if _GATEWAY else "ERROR",
+                   "error": str(exc)[:240], "scope": "THIS_DEVICE_ONLY",
+                   "remoteSessionsRevoked": False, "ordersEnabled": False}
+    return json.dumps(payload, separators=(",", ":"))
+
 def adapter_status_json() -> str:
     return json.dumps({"provider": "iqair", "version": "1.0.0",
         "state": _GATEWAY.state if _GATEWAY is not None else "DISCONNECTED",
