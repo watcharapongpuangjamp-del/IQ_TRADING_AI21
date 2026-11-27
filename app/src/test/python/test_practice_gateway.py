@@ -31,6 +31,9 @@ class FakeClient:
             time.sleep(self.delay)
         return self.connect_result
 
+    def change_balance(self, mode):
+        self.mode = mode
+
     def get_balance_mode(self):
         return self.mode
 
