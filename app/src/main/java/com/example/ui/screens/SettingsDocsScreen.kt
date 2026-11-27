@@ -104,6 +104,7 @@ fun SettingsDocsScreen(
     onSendLocalNotificationTest: () -> Unit,
     onUpdateTraderName: (String) -> Unit,
     savedIqOptionEmail: String? = null,
+    savedIqOptionPassword: String? = null,
     practiceConnectionState: String = "DISCONNECTED",
     practiceSessionVerified: Boolean = false,
     practiceBalance: Double? = null,
@@ -134,7 +135,7 @@ fun SettingsDocsScreen(
     }
 
     var iqOptionEmail by remember(savedIqOptionEmail) { mutableStateOf(savedIqOptionEmail.orEmpty()) }
-    var iqOptionPassword by remember { mutableStateOf("") }
+    var iqOptionPassword by remember(savedIqOptionPassword) { mutableStateOf(savedIqOptionPassword.orEmpty()) }
     var rememberIqCredentials by remember(savedIqOptionEmail) { mutableStateOf(!savedIqOptionEmail.isNullOrBlank()) }
 
     var backendUrl by remember(settings.backendBaseUrl) { mutableStateOf(settings.backendBaseUrl) }
@@ -248,13 +249,12 @@ fun SettingsDocsScreen(
                         Button(
                             onClick = {
                                 onConnectPractice(iqOptionEmail.trim(), iqOptionPassword, rememberIqCredentials)
-                                iqOptionPassword = ""
                             },
-                            enabled = !practiceSessionVerified && iqOptionEmail.contains("@") && iqOptionPassword.isNotBlank(),
+                            enabled = !practiceSessionVerified && iqOptionEmail.contains("@") && (iqOptionPassword.isNotBlank() || !savedIqOptionPassword.isNullOrBlank()),
                             modifier = Modifier.weight(1f).height(48.dp).testTag("connect_iqoption_practice_button")
                         ) { Text("Connect Practice") }
                         OutlinedButton(
-                            onClick = { onDisconnectPractice(); iqOptionPassword = "" },
+                            onClick = { onDisconnectPractice() },
                             enabled = practiceSessionVerified,
                             modifier = Modifier.weight(1f).height(48.dp).testTag("disconnect_iqoption_practice_button")
                         ) { Text("Disconnect") }
