@@ -87,10 +87,7 @@ class IQOptionBrokerConnector(BrokerConnector):
             "BROKER_CANDLES",
             "TURBO_OPTIONS",
             "BINARY_OPTIONS",
-            "DIGITAL_OPTIONS",
-            "FOREX_MARGIN",
-            "CRYPTO_MARGIN",
-            "CFD_MARGIN",
+            "ASSET_DIRECTORY",
             "POSITIONS_AND_HISTORY",
             "BROKER_SETTLEMENT_RECONCILIATION",
             "REAL_ACCOUNT_LOCKED",
@@ -187,6 +184,14 @@ class IQOptionBrokerConnector(BrokerConnector):
             raise RuntimeError("Invalid balance returned by IQ Option.")
         self._balance = float(balance)
         return round(self._balance, 2)
+
+    async def get_asset_metadata(self) -> Dict[str, Any]:
+        """Return iqair's unified six-category asset directory (read-only)."""
+        await self._assert_practice()
+        metadata = await self._run(self._client.get_asset_metadata)
+        if not isinstance(metadata, dict):
+            raise RuntimeError("IQ Option returned an invalid asset directory.")
+        return metadata
 
     async def get_market_data(self, instrument: str) -> Dict[str, float]:
         candles = await self.get_candles(instrument, "1m", limit=2)
@@ -337,7 +342,13 @@ class IQOptionBrokerConnector(BrokerConnector):
         if state in (TradeState.WON, TradeState.LOST, TradeState.SOLD, TradeState.EXPIRED):
             pnl_value = snapshot.pnl_net if snapshot.pnl_net is not None else snapshot.pnl
             pnl = float(pnl_value or 0.0)
-            outcome = "WON" if state == TradeState.WON else ("LOST" if state == TradeState.LOST else str(state).upper())
+            if state == TradeState.WON:
+                outcome = "WON"
+            elif state == TradeState.LOST:
+                outcome = "LOST"
+            else:
+                # SOLD/EXPIRED positions are classified from broker-reported net P&L.
+                outcome = "WON" if pnl > 0 else "LOST"
             return ConnectorOrderResult(
                 order_id=key,
                 broker_order_id=str(meta.get("broker_order_id", order_id)),
