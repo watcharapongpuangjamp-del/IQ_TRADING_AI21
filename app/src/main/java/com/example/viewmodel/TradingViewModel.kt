@@ -163,6 +163,7 @@ class TradingViewModel(
     val selectedOrderEvents: StateFlow<List<OrderLifecycleEvent>> = _selectedOrderEvents.asStateFlow()
 
     val savedIqOptionEmail: String? = credentialVault.getIqOptionEmail()
+    val savedIqOptionPassword: String? = credentialVault.getIqOptionPassword()
 
     val integrationSettings: StateFlow<IntegrationSettings> = credentialVault.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), IntegrationSettings())
@@ -1734,8 +1735,9 @@ class TradingViewModel(
                     _snackbarMessage.value = "Broker ตอบกลับแต่ไม่สามารถยืนยัน Practice Session ได้ — ปิดการส่งคำสั่ง"
                     return@onSuccess
                 }
+                val localSimulationBalance = (profileState.value as? LocalUiState.Success)?.data?.simulationBalance ?: 10000.0
                 localRepository.updateUserBalanceAndMode(
-                    currentUserId, connected.balance, ExecutionMode.DEMO, markSavedTimestamp = true
+                    currentUserId, localSimulationBalance, ExecutionMode.DEMO, markSavedTimestamp = true
                 )
                 _terminalState.update {
                     it.copy(
@@ -1764,6 +1766,10 @@ class TradingViewModel(
             if (backendClient.isValidHttpUrl(baseUrl)) {
                 backendClient.disconnectIqOptionPractice(baseUrl, token)
             }
+            val localSimulationBalance = (profileState.value as? LocalUiState.Success)?.data?.simulationBalance ?: 10000.0
+            localRepository.updateUserBalanceAndMode(
+                currentUserId, localSimulationBalance, ExecutionMode.SIMULATION, markSavedTimestamp = true
+            )
             _terminalState.update {
                 it.copy(
                     accountMode = "DISCONNECTED",
