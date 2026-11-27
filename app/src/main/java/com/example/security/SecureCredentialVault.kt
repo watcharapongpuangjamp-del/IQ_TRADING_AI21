@@ -25,8 +25,8 @@ private val Context.integrationDataStore: DataStore<Preferences> by preferencesD
 
 /**
  * Hardware-backed AES-256-GCM credential vault using AndroidKeyStore.
- * Never persists broker passwords on Android; encrypts only Telegram Bot Token
- * and optional Python FastAPI Backend Bearer Token.
+ * Encrypts broker credentials, Telegram Bot Token, and optional backend token
+ * with an AndroidKeyStore AES-GCM key. Secrets are never stored as plaintext.
  */
 class SecureCredentialVault(context: Context) {
 
