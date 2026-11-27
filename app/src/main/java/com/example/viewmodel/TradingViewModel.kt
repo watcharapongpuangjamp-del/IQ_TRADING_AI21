@@ -14,6 +14,8 @@ import com.example.data.remote.OrderSubmitRequestDto
 import com.example.data.remote.ReplayEvaluationResponseDto
 import com.example.data.remote.TelegramNotifier
 import com.example.data.repository.LocalTradingRepository
+import com.example.engine.IQOptionPracticeService
+import com.example.engine.PracticeConnectionResult
 import com.example.engine.LiveReadinessEvaluator
 import com.example.engine.LocalBacktestEngine
 import com.example.engine.LocalStrategySelectorEngine
@@ -119,6 +121,7 @@ class TradingViewModel(
     private val localRepository: LocalTradingRepository,
     private val accountPreferences: DataStore<Preferences>,
     private val credentialVault: SecureCredentialVault,
+    private val practiceService: IQOptionPracticeService,
     private val telegramNotifier: TelegramNotifier,
     private val backendClient: BackendConnectorClient,
     private val notificationHelper: TradingNotificationHelper,
@@ -133,6 +136,59 @@ class TradingViewModel(
     private val accountTypeKey = stringPreferencesKey("selected_account_type")
     private val _selectedAccountType = MutableStateFlow(AccountType.PRACTICE)
     val selectedAccountType: StateFlow<AccountType> = _selectedAccountType.asStateFlow()
+
+    private val _practiceConnection = MutableStateFlow<PracticeConnectionResult?>(null)
+    val practiceConnection: StateFlow<PracticeConnectionResult?> = _practiceConnection.asStateFlow()
+    private val _practiceBusy = MutableStateFlow(false)
+    val practiceBusy: StateFlow<Boolean> = _practiceBusy.asStateFlow()
+
+    fun connectPractice(email: String, password: String, rememberCredentials: Boolean) {
+        if (_selectedAccountType.value != AccountType.PRACTICE) {
+            _snackbarMessage.value = "การเชื่อมต่อ IQ Option ถูกจำกัดไว้ที่ Practice Account"
+            return
+        }
+        if (_practiceBusy.value) return
+        viewModelScope.launch {
+            _practiceBusy.value = true
+            try {
+                val result = practiceService.connect(email, password, rememberCredentials)
+                _practiceConnection.value = result
+                _snackbarMessage.value = if (result.ok) {
+                    "เชื่อมต่อ Practice สำเร็จ — ยืนยันยอดเงินจากโบรกเกอร์แล้ว"
+                } else {
+                    "เชื่อมต่อ Practice ไม่สำเร็จ: ${result.error ?: result.state}"
+                }
+            } catch (error: Exception) {
+                _practiceConnection.value = PracticeConnectionResult(
+                    ok = false, state = "ERROR",
+                    error = error.localizedMessage ?: "Connection failed"
+                )
+                _snackbarMessage.value = "เชื่อมต่อ Practice ไม่สำเร็จ"
+            } finally {
+                _practiceBusy.value = false
+            }
+        }
+    }
+
+    fun disconnectPractice() {
+        if (_practiceBusy.value) return
+        viewModelScope.launch {
+            _practiceBusy.value = true
+            try {
+                _practiceConnection.value = practiceService.disconnect()
+                _snackbarMessage.value = "ตัดการเชื่อมต่อ IQ Option แล้ว"
+            } catch (error: Exception) {
+                _snackbarMessage.value = "ตัดการเชื่อมต่อไม่สมบูรณ์"
+            } finally {
+                _practiceBusy.value = false
+            }
+        }
+    }
+
+    fun clearSavedPracticeCredentials() {
+        practiceService.clearSavedCredentials()
+        _snackbarMessage.value = "ลบข้อมูลเข้าสู่ระบบที่บันทึกในเครื่องแล้ว"
+    }
 
     fun selectAccountType(accountType: AccountType) {
         _selectedAccountType.value = accountType
