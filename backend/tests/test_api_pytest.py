@@ -434,7 +434,7 @@ def test_pending_order_auto_reconciles_before_new_trade_without_double_counting(
             "idempotency_key": "idem-second-after-pending-002",
         },
     )
-    assert second_res.status_code == 200
+    assert second_res.status_code == 200, second_res.text
     assert second_res.json()["lifecycle_state"] == "SETTLED"
 
     reconciled_first = client.get(f"/api/v1/orders/{pending_order['order_id']}").json()
