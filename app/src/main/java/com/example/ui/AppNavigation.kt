@@ -58,6 +58,7 @@ import com.example.data.remote.TelegramNotifier
 import com.example.data.repository.LocalTradingRepository
 import com.example.model.RiskPolicy
 import com.example.model.StrategyConfig
+import com.example.engine.IQOptionPracticeService
 import com.example.security.SecureCredentialVault
 import com.example.ui.notifications.TradingNotificationHelper
 import com.example.ui.screens.PnLDashboardScreen
@@ -144,6 +145,7 @@ private fun LocalTradingShell(
                     localRepository = LocalTradingRepository(dao),
                     accountPreferences = app.accountPreferencesDataStore,
                     credentialVault = SecureCredentialVault(app),
+                    practiceService = IQOptionPracticeService(app),
                     telegramNotifier = TelegramNotifier(),
                     backendClient = BackendConnectorClient(),
                     notificationHelper = TradingNotificationHelper(app),
@@ -168,6 +170,8 @@ private fun LocalTradingShell(
     val dailySummariesState by viewModel.dailySummariesState.collectAsStateWithLifecycle()
     val integrationSettings by viewModel.integrationSettings.collectAsStateWithLifecycle()
     val selectedAccountType by viewModel.selectedAccountType.collectAsStateWithLifecycle()
+    val practiceConnection by viewModel.practiceConnection.collectAsStateWithLifecycle()
+    val practiceBusy by viewModel.practiceBusy.collectAsStateWithLifecycle()
     val backendHealth by viewModel.backendHealth.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
     val mlModels by viewModel.mlModels.collectAsStateWithLifecycle()
@@ -373,6 +377,11 @@ private fun LocalTradingShell(
                             SettingsDocsScreen(
                                 selectedAccountType = selectedAccountType,
                                 onSelectAccountType = viewModel::selectAccountType,
+                                practiceConnection = practiceConnection,
+                                practiceBusy = practiceBusy,
+                                onConnectPractice = viewModel::connectPractice,
+                                onDisconnectPractice = viewModel::disconnectPractice,
+                                onClearSavedPracticeCredentials = viewModel::clearSavedPracticeCredentials,
                                 userProfile = userProfile,
                                 databaseStats = databaseStats,
                                 settings = integrationSettings,
