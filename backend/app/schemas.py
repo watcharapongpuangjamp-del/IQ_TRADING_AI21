@@ -353,10 +353,21 @@ class ModeSwitchRequest(BaseModel):
 
 
 class TradingStateResponse(BaseModel):
+    # Execution/account mode is separate from AI workflow and market product type.
     execution_mode: ExecutionMode
+    execution_mode_label: str = "SIMULATION"
+    account_mode: str = "SIMULATION"
+    account_display_label: str = "Simulation"
     connector_name: str
     connector_connected: bool
+    connection_state: str = "DISCONNECTED"
+    session_verified: bool = False
     live_authorized: bool
+    real_account_locked: bool = True
+    operation_mode: str = "MANUAL"
+    learning_status: str = "IDLE"
+    training_status: str = "IDLE"
+    backtest_status: str = "IDLE"
     balance: float
     total_trades_today: int
     wins_today: int
@@ -366,6 +377,31 @@ class TradingStateResponse(BaseModel):
     emergency_stopped: bool
     win_rate_pct: float
     unresolved_orders_count: int = 0
+
+
+class AssetCatalogItemSchema(BaseModel):
+    product_type: str
+    product_label: str
+    symbol: str
+    display_name: str
+    is_open: Optional[bool] = None
+    status: str = "UNKNOWN"
+    payout_rate: Optional[float] = None
+    payout_percent: Optional[float] = None
+    min_stake: Optional[float] = None
+    max_stake: Optional[float] = None
+    leverage: Optional[float] = None
+    source: str
+
+
+class AssetCatalogResponse(BaseModel):
+    account_mode: str
+    connector: str
+    source: str
+    supported_product_types: List[str]
+    unavailable_product_types: List[str]
+    items: List[AssetCatalogItemSchema]
+    fetched_at: int
 
 
 class TrainModelRequest(BaseModel):
