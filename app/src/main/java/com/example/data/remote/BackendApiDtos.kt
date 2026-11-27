@@ -444,6 +444,7 @@ data class TradingStateDto(
 
 @JsonClass(generateAdapter = true)
 data class AssetCatalogItemDto(
+    val rank: Int = 0,
     val product_type: String = "UNKNOWN",
     val product_label: String = "Unknown",
     val symbol: String = "",
