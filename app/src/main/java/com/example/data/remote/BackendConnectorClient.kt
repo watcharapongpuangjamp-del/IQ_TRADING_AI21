@@ -91,6 +91,11 @@ interface FastApiTradingApi {
         @Header("Authorization") authHeader: String?
     ): Response<TradingStateDto>
 
+    @GET("api/v1/assets/catalog")
+    suspend fun getAssetCatalog(
+        @Header("Authorization") authHeader: String?
+    ): Response<AssetCatalogResponseDto>
+
     @PUT("api/v1/strategy")
     suspend fun updateStrategy(
         @Header("Authorization") authHeader: String?,
@@ -603,6 +608,18 @@ class BackendConnectorClient {
             response.body()!!
         } else {
             throw IllegalStateException("State HTTP ${response.code()}")
+        }
+    }
+
+    suspend fun fetchAssetCatalog(
+        baseUrl: String,
+        bearerToken: String?
+    ): Result<AssetCatalogResponseDto> = safeCall {
+        val response = buildApi(baseUrl).getAssetCatalog(buildAuthHeader(baseUrl, bearerToken))
+        if (response.isSuccessful && response.body() != null) {
+            response.body()!!
+        } else {
+            throw IllegalStateException("Asset catalog HTTP ${response.code()}")
         }
     }
 
