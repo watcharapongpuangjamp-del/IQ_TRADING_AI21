@@ -214,6 +214,92 @@ class IQOptionBrokerConnector(BrokerConnector):
         self._metadata_cached_at = time.monotonic()
         return metadata
 
+    @staticmethod
+    def _optional_number(asset: Dict[str, Any], *keys: str) -> Optional[float]:
+        for key in keys:
+            value = asset.get(key)
+            if value is None:
+                continue
+            try:
+                number = float(value)
+                if math.isfinite(number):
+                    return number
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    async def get_asset_catalog(self) -> Dict[str, Any]:
+        """Normalize the broker's asset directory without inventing unavailable assets."""
+        await self._assert_practice()
+        metadata = await self.get_asset_metadata()
+        category_aliases = {
+            "blitz": ("blitz", "BLITZ", "Blitz"),
+            "turbo": ("turbo", "TURBO", "Turbo"),
+            "binary": ("binary", "BINARY", "Binary"),
+            "digital": ("digital", "DIGITAL", "Digital"),
+            "futures": ("futures", "future", "FUTURES", "Future"),
+            "forex": ("forex", "marginal-forex", "FOREX"),
+            "crypto": ("crypto", "marginal-crypto", "CRYPTO"),
+            "cfd": ("cfd", "marginal-cfd", "CFD"),
+        }
+        display_names = {
+            "blitz": "Blitz",
+            "turbo": "Turbo Options",
+            "binary": "Binary Options",
+            "digital": "Digital Options",
+            "futures": "Futures",
+            "forex": "Forex Margin",
+            "crypto": "Crypto Margin",
+            "cfd": "CFD Margin",
+        }
+        items: List[Dict[str, Any]] = []
+        supported = []
+        for product_type, aliases in category_aliases.items():
+            category_data = next((metadata.get(alias) for alias in aliases if isinstance(metadata.get(alias), dict)), None)
+            if category_data is None:
+                continue
+            supported.append(product_type.upper())
+            for symbol, raw in category_data.items():
+                if not isinstance(raw, dict):
+                    continue
+                normalized_symbol = str(raw.get("ticker") or raw.get("symbol") or symbol).upper()
+                opened = raw.get("is_open", raw.get("open"))
+                payout = self._optional_number(raw, "payout", "payout_rate", "profit_percent", "payout_percent")
+                if payout is not None and payout > 1.0:
+                    payout = payout / 100.0
+                min_stake = self._optional_number(raw, "min_amount", "min_stake", "min_order_amount")
+                max_stake = self._optional_number(raw, "max_amount", "max_stake", "max_order_amount")
+                leverage = self._optional_number(raw, "leverage", "max_leverage")
+                status_value = "OPEN" if opened is True else ("CLOSED" if opened is False else "UNKNOWN")
+                items.append({
+                    "product_type": product_type.upper(),
+                    "product_label": display_names[product_type],
+                    "symbol": normalized_symbol,
+                    "display_name": str(raw.get("name") or raw.get("title") or normalized_symbol),
+                    "is_open": opened if isinstance(opened, bool) else None,
+                    "status": status_value,
+                    "payout_rate": payout,
+                    "payout_percent": round(payout * 100.0, 2) if payout is not None else None,
+                    "min_stake": min_stake,
+                    "max_stake": max_stake,
+                    "leverage": leverage,
+                    "source": "IQ_OPTION_IQAIR_ASSET_METADATA",
+                })
+        items.sort(key=lambda item: (item["product_type"], item["status"] != "OPEN", item["symbol"]))
+        unavailable = [
+            key.upper() for key in category_aliases
+            if key.upper() not in supported
+        ]
+        return {
+            "account_mode": "PRACTICE",
+            "connector": self.name,
+            "source": "IQ_OPTION_IQAIR_ASSET_METADATA",
+            "supported_product_types": supported,
+            "unavailable_product_types": unavailable,
+            "items": items,
+            "fetched_at": int(time.time() * 1000),
+        }
+
     async def get_payout_rate(self, instrument: str, expiry_seconds: int) -> float:
         """Return the broker-reported payout for the selected turbo/binary contract."""
         if expiry_seconds < 60 or expiry_seconds > 3600 or expiry_seconds % 60:
