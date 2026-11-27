@@ -174,6 +174,8 @@ class IQOptionBrokerConnector(BrokerConnector):
                 self._connected = False
                 self._verified = False
                 self._account_mode = "DISCONNECTED"
+                self._email = ""
+                self._password = ""
                 raise
 
     async def disconnect(self) -> None:
@@ -187,6 +189,8 @@ class IQOptionBrokerConnector(BrokerConnector):
                 await self._run(client.api.close)
             except Exception:
                 pass
+        self._email = ""
+        self._password = ""
 
     @staticmethod
     def _ticker(instrument: str) -> str:
