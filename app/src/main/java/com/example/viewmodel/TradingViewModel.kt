@@ -16,6 +16,7 @@ import com.example.data.remote.TelegramNotifier
 import com.example.data.repository.LocalTradingRepository
 import com.example.engine.IQOptionPracticeService
 import com.example.engine.PracticeConnectionResult
+import com.example.engine.PracticeTradeResult
 import com.example.engine.LiveReadinessEvaluator
 import com.example.engine.LocalBacktestEngine
 import com.example.engine.LocalStrategySelectorEngine
@@ -141,6 +142,42 @@ class TradingViewModel(
     val practiceConnection: StateFlow<PracticeConnectionResult?> = _practiceConnection.asStateFlow()
     private val _practiceBusy = MutableStateFlow(false)
     val practiceBusy: StateFlow<Boolean> = _practiceBusy.asStateFlow()
+    private val _practiceTradeBusy = MutableStateFlow(false)
+    val practiceTradeBusy: StateFlow<Boolean> = _practiceTradeBusy.asStateFlow()
+    private val _lastPracticeTrade = MutableStateFlow<PracticeTradeResult?>(null)
+    val lastPracticeTrade: StateFlow<PracticeTradeResult?> = _lastPracticeTrade.asStateFlow()
+
+    fun executePracticeManualTrade(asset: String, direction: String, amount: Double, expiryMinutes: Int) {
+        if (_selectedAccountType.value != AccountType.PRACTICE) { _snackbarMessage.value = "Practice account only"; return }
+        if (_practiceConnection.value?.ok != true || _practiceConnection.value?.accountType != "PRACTICE") {
+            _snackbarMessage.value = "ต้องเชื่อมต่อและยืนยัน Practice Account ก่อน"; return
+        }
+        if (_practiceTradeBusy.value || _practiceBusy.value) return
+        val risk = (riskPolicyState.value as? LocalUiState.Success)?.data
+        if (risk?.emergencyStopped == true) { _snackbarMessage.value = "KILL STOP ทำงานอยู่"; return }
+        if (risk != null && amount > risk.maxTradeAmount) { _snackbarMessage.value = "จำนวนเงินเกิน Max Trade Amount"; return }
+        viewModelScope.launch {
+            _practiceTradeBusy.value = true
+            _lastPracticeTrade.value = null
+            try {
+                val result = practiceService.executePracticeTrade(asset, direction, amount, expiryMinutes)
+                _lastPracticeTrade.value = result
+                if (result.ok && result.orderId != null && result.pnl != null && result.outcome != null) {
+                    val status = when (result.outcome) { "WIN" -> TradeStatus.WON.name; "LOSS" -> TradeStatus.LOST.name; else -> TradeStatus.CANCELLED.name }
+                    val journal = TradeRecord(
+                        id = "iqp_" + result.orderId, userId = currentUserId, instrument = asset, timeframe = "1m",
+                        direction = direction, mode = "PRACTICE", amount = amount, payoutRate = 0.0,
+                        entryPrice = 1.0, exitPrice = 1.0, status = status, pnl = result.pnl,
+                        strategyName = "IQ Option Practice Manual",
+                        explanation = "Broker-confirmed order " + result.orderId + "; outcome=" + result.outcome
+                    )
+                    localRepository.createTrade(journal)
+                    _snackbarMessage.value = "Practice " + result.outcome + ": P&L " + result.pnl + " USD"
+                } else { _snackbarMessage.value = "Practice order ไม่สำเร็จ/ยังไม่ยืนยันผล: " + (result.error ?: "UNKNOWN") }
+            } catch (error: Exception) { _snackbarMessage.value = "Practice order error: " + (error.localizedMessage ?: "unknown") }
+            finally { _practiceTradeBusy.value = false }
+        }
+    }
 
     fun connectPractice(email: String, password: String, rememberCredentials: Boolean) {
         if (_selectedAccountType.value != AccountType.PRACTICE) {
