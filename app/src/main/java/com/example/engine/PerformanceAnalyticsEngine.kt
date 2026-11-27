@@ -22,11 +22,11 @@ object PerformanceAnalyticsEngine {
         modeFilter: String = "SIMULATION"
     ): PerformanceAnalyticsReport {
         val normalizedFilter = modeFilter.trim().uppercase().let {
-            if (it in setOf("SIMULATION", "LIVE", "DEMO", "ALL")) it else "SIMULATION"
+            if (it in setOf("SIMULATION", "LIVE", "DEMO", "PRACTICE", "ALL")) it else "SIMULATION"
         }
 
         val settled = trades.filter {
-            it.status == TradeStatus.WON.name || it.status == TradeStatus.LOST.name
+            it.status == TradeStatus.WON.name || it.status == TradeStatus.LOST.name || it.status == TradeStatus.DRAW.name
         }
         val simTrades = settled.filter {
             ExecutionMode.safeValueOf(it.mode) == ExecutionMode.SIMULATION
@@ -37,11 +37,13 @@ object PerformanceAnalyticsEngine {
         val demoTrades = settled.filter {
             ExecutionMode.safeValueOf(it.mode) == ExecutionMode.DEMO
         }
+        val practiceTrades = settled.filter { it.mode.equals("PRACTICE", ignoreCase = true) }
 
         val (activeLabel, filtered) = when (normalizedFilter) {
             "ALL" -> "ALL (LABELED)" to settled
             "LIVE" -> "LIVE" to liveTrades
             "DEMO" -> "DEMO" to demoTrades
+            "PRACTICE" -> "PRACTICE" to practiceTrades
             else -> "SIMULATION" to simTrades
         }
 
@@ -65,6 +67,7 @@ object PerformanceAnalyticsEngine {
         val total = ordered.size
         val wins = ordered.count { it.status == TradeStatus.WON.name }
         val losses = ordered.count { it.status == TradeStatus.LOST.name }
+        val draws = ordered.count { it.status == TradeStatus.DRAW.name }
         val grossProfit = ordered.filter { it.pnl > 0.0 }.sumOf { it.pnl }
         val grossLoss = abs(ordered.filter { it.pnl < 0.0 }.sumOf { it.pnl })
         val netPnl = ordered.sumOf { it.pnl }
@@ -88,10 +91,13 @@ object PerformanceAnalyticsEngine {
                 curWinStreak++
                 curLossStreak = 0
                 maxWinStreak = max(maxWinStreak, curWinStreak)
-            } else {
+            } else if (t.status == TradeStatus.LOST.name) {
                 curLossStreak++
                 curWinStreak = 0
                 maxLossStreak = max(maxLossStreak, curLossStreak)
+            } else {
+                curWinStreak = 0
+                curLossStreak = 0
             }
         }
 
@@ -107,6 +113,7 @@ object PerformanceAnalyticsEngine {
             totalTrades = total,
             wins = wins,
             losses = losses,
+            draws = draws,
             winRatePct = round2(winRate),
             netPnl = round2(netPnl),
             grossProfit = round2(grossProfit),
