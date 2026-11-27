@@ -402,6 +402,37 @@ private fun LocalTradingShell(
                         }
                     }
 
+                    // Explicitly distinguish broker-confirmed Practice data from local simulation.
+                    val isBrokerPracticeConnected = practiceConnection?.ok == true &&
+                        practiceConnection?.accountType == "PRACTICE"
+                    Surface(
+                        color = if (isBrokerPracticeConnected) {
+                            tradingColors.bullishContainer
+                        } else {
+                            tradingColors.warningContainer
+                        },
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 4.dp, end = 8.dp)
+                            .testTag("data_source_badge")
+                    ) {
+                        Text(
+                            text = if (isBrokerPracticeConnected) {
+                                "IQ OPTION PRACTICE • READ ONLY"
+                            } else {
+                                "SIMULATED"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isBrokerPracticeConnected) {
+                                tradingColors.bullish
+                            } else {
+                                tradingColors.warning
+                            },
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+
                     if (!localDbError.isNullOrBlank()) {
                         Surface(
                             color = tradingColors.bearishContainer,
