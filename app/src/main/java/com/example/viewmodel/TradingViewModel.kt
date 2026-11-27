@@ -162,6 +162,8 @@ class TradingViewModel(
     private val _selectedOrderEvents = MutableStateFlow<List<OrderLifecycleEvent>>(emptyList())
     val selectedOrderEvents: StateFlow<List<OrderLifecycleEvent>> = _selectedOrderEvents.asStateFlow()
 
+    val savedIqOptionEmail: String? = credentialVault.getIqOptionEmail()
+
     val integrationSettings: StateFlow<IntegrationSettings> = credentialVault.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), IntegrationSettings())
 
@@ -1705,6 +1707,75 @@ class TradingViewModel(
             _snackbarMessage.value = "เข้ารหัส Keystore AES-256-GCM และบันทึกการตั้งค่าแล้ว"
             testBackendConnection()
             startMarketStream()
+        }
+    }
+
+    fun connectPracticeAccount(email: String, password: String, rememberCredentials: Boolean) {
+        viewModelScope.launch {
+            val settings = integrationSettings.value
+            val baseUrl = settings.backendBaseUrl
+            val token = credentialVault.getBackendToken()
+            if (!backendClient.isValidHttpUrl(baseUrl) || token.isNullOrBlank()) {
+                _snackbarMessage.value = "กรุณาตั้งค่า FastAPI URL และ Backend Bearer Token ก่อนเชื่อมต่อ Practice"
+                return@launch
+            }
+            if (!backendClient.isSafeTokenTransport(baseUrl, hasToken = true)) {
+                _snackbarMessage.value = "การส่งข้อมูลบัญชีต้องใช้ HTTPS หรือ localhost เท่านั้น"
+                return@launch
+            }
+            if (rememberCredentials) credentialVault.saveIqOptionCredentials(email, password)
+            else credentialVault.clearIqOptionCredentials()
+
+            _terminalState.update { it.copy(connectionState = "CONNECTING", sessionVerified = false) }
+            val result = backendClient.connectIqOptionPractice(baseUrl, token, email, password)
+            result.onSuccess { connected ->
+                if (!connected.connected || !connected.session_verified || connected.account_mode != "PRACTICE" || connected.live_authorized) {
+                    _terminalState.update { it.copy(connectionState = "UNVERIFIED", sessionVerified = false, accountMode = "UNVERIFIED") }
+                    _snackbarMessage.value = "Broker ตอบกลับแต่ไม่สามารถยืนยัน Practice Session ได้ — ปิดการส่งคำสั่ง"
+                    return@onSuccess
+                }
+                localRepository.updateUserBalanceAndMode(
+                    currentUserId, connected.balance, ExecutionMode.DEMO, markSavedTimestamp = true
+                )
+                _terminalState.update {
+                    it.copy(
+                        accountMode = "PRACTICE",
+                        accountDisplayLabel = "IQ Option Practice",
+                        brokerBalance = connected.balance,
+                        connectionState = "CONNECTED",
+                        sessionVerified = true,
+                        realAccountLocked = true
+                    )
+                }
+                _snackbarMessage.value = "เชื่อมต่อ IQ Option Practice สำเร็จ • Balance: ${format2(connected.balance)}"
+                refreshBackendExecutionState(baseUrl, token)
+            }.onFailure { error ->
+                _terminalState.update { it.copy(connectionState = "DISCONNECTED", sessionVerified = false, accountMode = "UNVERIFIED") }
+                _snackbarMessage.value = "เชื่อมต่อ Practice ไม่สำเร็จ: ${SecretRedactor.redact(error.localizedMessage, token)}"
+            }
+        }
+    }
+
+    fun disconnectPracticeAccount() {
+        viewModelScope.launch {
+            val settings = integrationSettings.value
+            val baseUrl = settings.backendBaseUrl
+            val token = credentialVault.getBackendToken()
+            if (backendClient.isValidHttpUrl(baseUrl)) {
+                backendClient.disconnectIqOptionPractice(baseUrl, token)
+            }
+            _terminalState.update {
+                it.copy(
+                    accountMode = "DISCONNECTED",
+                    accountDisplayLabel = "Disconnected",
+                    brokerBalance = null,
+                    connectionState = "DISCONNECTED",
+                    sessionVerified = false,
+                    assetCatalog = emptyList(),
+                    assetCatalogSource = "DISCONNECTED"
+                )
+            }
+            _snackbarMessage.value = "ตัดการเชื่อมต่อ IQ Option Practice แล้ว"
         }
     }
 
