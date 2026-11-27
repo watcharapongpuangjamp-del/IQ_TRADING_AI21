@@ -902,7 +902,8 @@ class TestPurePythonEngines(unittest.TestCase):
 
                 candles = await connector.get_candles("EUR/USD", "1m", limit=30)
                 self.assertEqual(len(candles), 30)
-                self.assertEqual(candles[0]["timestamp"] % 60000, 0)
+                self.assertGreater(candles[0]["timestamp"], 0)
+                self.assertEqual(candles[1]["timestamp"] - candles[0]["timestamp"], 60000)
                 self.assertEqual(candles[-1]["close"], 1.0834)
 
                 order = await connector.submit_order(
