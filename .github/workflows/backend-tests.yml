@@ -2,7 +2,7 @@ name: Backend Tests
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'feature/phase7-adaptive-latency-intelligence' ]
     paths:
       - 'backend/**'
       - '.github/workflows/backend-tests.yml'
