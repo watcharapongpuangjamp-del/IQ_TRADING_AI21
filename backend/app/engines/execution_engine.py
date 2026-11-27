@@ -490,6 +490,12 @@ class TradeExecutionEngine:
 
         # Persist order intent BEFORE calling broker so mid-flight crashes/timeouts are traceable
         payout_rate = INSTRUMENT_SPECS.get(request.instrument, INSTRUMENT_SPECS["EUR/USD"])["payout"]
+        broker_payout_reader = getattr(self._connector, "get_payout_rate", None)
+        if callable(broker_payout_reader):
+            try:
+                payout_rate = await broker_payout_reader(request.instrument, request.expiry_seconds)
+            except Exception as exc:
+                raise ExecutionValidationError(f"Broker asset/payout validation failed: {exc}") from exc
         order_id = f"ord_{uuid.uuid4().hex[:12]}"
         correlation_id = f"corr_{uuid.uuid4().hex[:12]}"
         entry_estimate = float(candles[-1]["close"])
