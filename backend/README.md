@@ -61,11 +61,12 @@ PYTHONPATH=. python -m pytest -v
 
 The `iqoption` adapter uses the user-supplied `iqair==1.0.0` package. It is intentionally Practice-only:
 
-- Set `BROKER_ADAPTER=iqoption`.
-- Set `IQOPTION_BALANCE_MODE=PRACTICE`.
-- Supply `IQOPTION_EMAIL` and `IQOPTION_PASSWORD` only through the backend's local, git-ignored environment file or deployment secret store. Never commit credentials or paste them into chat.
+- Set `BROKER_ADAPTER=iqoption` and `IQOPTION_BALANCE_MODE=PRACTICE`; leave `IQOPTION_EMAIL` and `IQOPTION_PASSWORD` empty.
+- Configure a strong `API_BEARER_TOKEN` and expose the backend through HTTPS. The Android Connect screen sends credentials to the authenticated `POST /api/v1/iqoption/connect` endpoint only after enforcing HTTPS (localhost is allowed for local development).
+- The backend holds the submitted credentials in process memory for the active session only. It does not write them to SQLite, environment files, logs, or cloud storage; disconnect clears them. Android can optionally remember them in the device's Android Keystore AES-256-GCM vault.
+- The authenticated `POST /api/v1/iqoption/disconnect` endpoint closes the broker session and returns the app/backend execution mode to SIMULATION.
 - Keep `ALLOW_LIVE_TRADING=false`. The connector's `live_authorized` property is hard-coded false and the execution-mode controller rejects `LIVE` regardless of configuration.
-- Switch the application execution mode to `DEMO` only after the broker session reports a verified `PRACTICE` account. `SIMULATION` remains a separate internal simulator.
+- The app switches to `DEMO` (displayed as PRACTICE) only after the broker session reports a verified `PRACTICE` account. `SIMULATION` remains a separate internal simulator.
 
 The first integration slice replaces the former random/mock IQ Option adapter with broker-backed login, Practice balance verification, broker candles, Turbo/Binary CALL/PUT order submission, broker order identifiers, settlement lookup, and read-only reconciliation. A submission is initially recorded as `PENDING`; the backend must confirm the final result from IQ Option before updating the risk ledger. An uncertain acknowledgement is never blindly resubmitted.
 
@@ -73,6 +74,17 @@ The supplied package also implements Digital Options, Forex margin, Crypto margi
 
 The package is unofficial and talks to an undocumented broker protocol. It can break when IQ Option changes its backend. CI tests use a fake client and never log in or place real broker orders.
 
+### Android Practice login flow
+
+1. Configure the backend with `BROKER_ADAPTER=iqoption`, `IQOPTION_BALANCE_MODE=PRACTICE`, and a strong API bearer token.
+2. Configure the Android app's FastAPI URL and Bearer Token. Use HTTPS for remote hosts.
+3. Open Connect & SQLite, enter the IQ Option email/password, and tap **Connect Practice**.
+4. The backend logs in, explicitly selects PRACTICE, verifies the broker-reported account mode, and reads the broker balance before returning success. It never selects REAL.
+5. Once verified, the app changes the execution mode to PRACTICE/DEMO. Existing order authorization, market-open/payout checks, risk guard, idempotency, and reconciliation remain in the execution path. Only the existing Turbo/Binary CALL/PUT order path is executable.
+6. The app's Simulation balance remains separate from the broker Practice balance. Disconnect returns the execution mode to Simulation.
+
+The connect endpoint does not place a test order automatically. A Practice trade is sent only when the user initiates a trade from the terminal or explicitly enables the configured auto-trading workflow. CI uses mocked broker clients; an actual IQ Option login/order still requires a user-run smoke test with their own Practice account.
+ 
 ## Trading Terminal: Explicit Modes and Asset Directory
 
 The terminal keeps independent dimensions separate:
