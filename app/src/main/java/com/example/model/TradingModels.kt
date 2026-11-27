@@ -30,6 +30,7 @@ enum class TradeStatus {
         fun toNormalizedStatus(raw: String?): String = when (safeValueOf(raw)) {
             WON -> WON.name
             LOST -> LOST.name
+            DRAW -> DRAW.name
             REJECTED -> REJECTED.name
             CANCELLED, FAILED -> CANCELLED.name
             OPEN, PENDING, UNKNOWN -> OPEN.name
