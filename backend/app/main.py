@@ -28,7 +28,8 @@ from app.engines.execution_engine import (
     ExecutionValidationError,
     TradeExecutionEngine,
 )
-from app.engines.learning_engine import LearningEvaluationEngine\nfrom app.engines.latency_intelligence import LatencySample, summarize_latency
+from app.engines.learning_engine import LearningEvaluationEngine
+from app.engines.latency_intelligence import LatencySample, summarize_latency
 from app.engines.market_intelligence import MarketIntelligenceEngine
 from app.engines.multi_timeframe import MultiTimeframeEngine
 from app.engines.replay_engine import SimulatorReplayEngine
