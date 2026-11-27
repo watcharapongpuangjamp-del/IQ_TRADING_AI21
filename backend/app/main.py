@@ -240,6 +240,9 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         except Exception as exc:
             # Do not echo credentials or authentication payloads in API errors.
             await connector.disconnect()
+            state = TradeExecutionEngine.get_or_create_state(db)
+            state.execution_mode = ExecutionMode.SIMULATION.value
+            db.commit()
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=f"IQ Option Practice login/verification failed: {type(exc).__name__}",
