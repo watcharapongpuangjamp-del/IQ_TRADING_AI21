@@ -81,6 +81,25 @@ def test_health_endpoint_defaults_to_simulation(client: TestClient) -> None:
     assert data["live_authorized"] is False
 
 
+def test_state_and_asset_catalog_separate_simulation_from_broker_account(client: TestClient) -> None:
+    state = client.get("/api/v1/state")
+    assert state.status_code == 200
+    payload = state.json()
+    assert payload["execution_mode"] == "SIMULATION"
+    assert payload["account_mode"] == "SIMULATION"
+    assert payload["account_display_label"] == "Simulation"
+    assert payload["real_account_locked"] is True
+    assert payload["live_authorized"] is False
+    assert payload["operation_mode"] in {"MANUAL", "AUTO"}
+
+    catalog = client.get("/api/v1/assets/catalog")
+    assert catalog.status_code == 200
+    asset_payload = catalog.json()
+    assert asset_payload["account_mode"] == "SIMULATION"
+    assert asset_payload["items"] == []
+    assert "FUTURES" in asset_payload["unavailable_product_types"]
+
+
 def test_candles_and_signal_pipeline(client: TestClient) -> None:
     candles_res = client.get("/api/v1/candles", params={"instrument": "EUR/USD", "timeframe": "1m", "limit": 60})
     assert candles_res.status_code == 200
