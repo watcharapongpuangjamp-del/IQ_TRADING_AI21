@@ -134,6 +134,17 @@ class IQOptionBrokerConnector(BrokerConnector):
         self._balance = float(balance)
         return self._balance
 
+    async def connect_with_credentials(self, email: str, password: str) -> bool:
+        """Open a user-requested Practice session without persisting credentials."""
+        email = (email or "").strip()
+        if not email or not password:
+            raise ValueError("IQ Option email and password are required.")
+        if self.connected:
+            await self.disconnect()
+        self._email = email
+        self._password = password
+        return await self.connect()
+
     async def connect(self) -> bool:
         if _IQAIR_IMPORT_ERROR is not None:
             raise RuntimeError("iqair==1.0.0 is missing. Install backend requirements.") from _IQAIR_IMPORT_ERROR
