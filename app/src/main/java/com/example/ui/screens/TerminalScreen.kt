@@ -36,17 +36,25 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import com.example.engine.PracticeTradeResult
 import com.example.model.DriftStatus
 import com.example.model.ExecutionMode
 import com.example.model.ExecutionStage
@@ -80,9 +88,16 @@ fun TerminalScreen(
     onResetReplay: () -> Unit,
     onExitReplay: () -> Unit,
     onReconcileOrders: () -> Unit = {},
+    practiceConnected: Boolean = false,
+    practiceTradeBusy: Boolean = false,
+    lastPracticeTrade: PracticeTradeResult? = null,
+    onPracticeTrade: (String, String, Double, Int) -> Unit = { _, _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val tradingColors = LocalTradingColors.current
+    var practiceStakeText by remember { mutableStateOf("1") }
+    var practiceDirection by remember { mutableStateOf("CALL") }
+    var practiceExpiry by remember { mutableStateOf(1) }
     val mode = ExecutionMode.safeValueOf(userProfile?.executionMode)
     val balance = userProfile?.simulationBalance ?: 10000.0
     val instrumentSpec = SUPPORTED_INSTRUMENTS.firstOrNull { it.symbol == terminalState.selectedInstrument }
@@ -338,6 +353,68 @@ fun TerminalScreen(
                     Text(
                         text = "กลยุทธ์: ${activeStrategy.name}",
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+
+        // Practice-only manual broker execution. Real account is never exposed here.
+        item {
+            Surface(
+                color = tradingColors.surfaceElevated,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, tradingColors.cardBorder),
+                modifier = Modifier.fillMaxWidth().testTag("practice_manual_trade_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("IQ OPTION PRACTICE • MANUAL TRADE", fontWeight = FontWeight.Bold,
+                        color = tradingColors.cyan)
+                    Text(
+                        if (practiceConnected) "เชื่อมต่อบัญชี Practice แล้ว • คำสั่งจะส่งไปยังโบรกเกอร์"
+                        else "ต้องเชื่อมต่อและยืนยัน Practice Account ในหน้า Connect ก่อน",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = practiceStakeText,
+                        onValueChange = { practiceStakeText = it.filter { ch -> ch.isDigit() || ch == '.' }.take(10) },
+                        label = { Text("จำนวนเงิน (USD)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth().testTag("practice_stake_input")
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = practiceDirection == "CALL", onClick = { practiceDirection = "CALL" }, label = { Text("CALL") }, modifier = Modifier.testTag("practice_call"))
+                        FilterChip(selected = practiceDirection == "PUT", onClick = { practiceDirection = "PUT" }, label = { Text("PUT") }, modifier = Modifier.testTag("practice_put"))
+                        Spacer(Modifier.weight(1f))
+                        FilterChip(selected = practiceExpiry == 1, onClick = { practiceExpiry = 1 }, label = { Text("1 min") })
+                        FilterChip(selected = practiceExpiry == 5, onClick = { practiceExpiry = 5 }, label = { Text("5 min") })
+                    }
+                    val stake = practiceStakeText.toDoubleOrNull()
+                    Button(
+                        onClick = { if (stake != null) onPracticeTrade(terminalState.selectedInstrument.replace("/", ""), practiceDirection, stake, practiceExpiry) },
+                        enabled = practiceConnected && !practiceTradeBusy && stake != null && stake > 0.0,
+                        modifier = Modifier.fillMaxWidth().height(50.dp).testTag("practice_submit_order")
+                    ) {
+                        Text(if (practiceTradeBusy) "กำลังส่งคำสั่ง / รอผล..." else "ส่งคำสั่ง Practice")
+                    }
+                    lastPracticeTrade?.let { trade ->
+                        Text(
+                            if (trade.ok) "Order " + trade.orderId + " • " + trade.outcome + " • P&L " + trade.pnl + " USD • Balance " + trade.balanceAfter + " USD"
+                            else "Order ไม่สำเร็จ/ยังไม่ยืนยัน: " + (trade.error ?: "UNKNOWN"),
+                            color = if (trade.ok) tradingColors.bullish else tradingColors.warning,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.testTag("practice_last_order_result")
+                        )
+                    }
+                    Text(
+                        "เริ่มต้นด้วยการเทรด Manual เท่านั้น • ระบบจะรอผลจากโบรกเกอร์ก่อนอนุญาตไม้ถัดไป",
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
