@@ -91,6 +91,17 @@ interface FastApiTradingApi {
         @Header("Authorization") authHeader: String?
     ): Response<TradingStateDto>
 
+    @POST("api/v1/iqoption/connect")
+    suspend fun connectIqOptionPractice(
+        @Header("Authorization") authHeader: String?,
+        @Body request: IQOptionConnectRequestDto
+    ): Response<IQOptionConnectResponseDto>
+
+    @POST("api/v1/iqoption/disconnect")
+    suspend fun disconnectIqOptionPractice(
+        @Header("Authorization") authHeader: String?
+    ): Response<Map<String, Any>>
+
     @GET("api/v1/assets/catalog")
     suspend fun getAssetCatalog(
         @Header("Authorization") authHeader: String?
@@ -609,6 +620,31 @@ class BackendConnectorClient {
         } else {
             throw IllegalStateException("State HTTP ${response.code()}")
         }
+    }
+
+    suspend fun connectIqOptionPractice(
+        baseUrl: String,
+        bearerToken: String?,
+        email: String,
+        password: String
+    ): Result<IQOptionConnectResponseDto> = safeCall {
+        require(isSafeTokenTransport(baseUrl, hasToken = true)) {
+            "Practice credentials require HTTPS (or localhost for local development)."
+        }
+        val response = buildApi(baseUrl).connectIqOptionPractice(
+            buildAuthHeader(baseUrl, bearerToken),
+            IQOptionConnectRequestDto(email.trim(), password)
+        )
+        if (response.isSuccessful && response.body() != null) response.body()!!
+        else throw IllegalStateException("IQ Option Practice connect HTTP ${response.code()}")
+    }
+
+    suspend fun disconnectIqOptionPractice(
+        baseUrl: String,
+        bearerToken: String?
+    ): Result<Unit> = safeCall {
+        val response = buildApi(baseUrl).disconnectIqOptionPractice(buildAuthHeader(baseUrl, bearerToken))
+        if (!response.isSuccessful) throw IllegalStateException("IQ Option disconnect HTTP ${response.code()}")
     }
 
     suspend fun fetchAssetCatalog(
