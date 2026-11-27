@@ -56,7 +56,7 @@ class PracticeGatewayTests(unittest.TestCase):
         self.assertEqual(snapshot.balance, 10000.0)
         self.assertEqual(snapshot.currency, "USD")
         self.assertEqual(snapshot.account_id, "44")
-        self.assertEqual(gateway.state, "CONNECTED_READ_ONLY")
+        self.assertEqual(gateway.state, "CONNECTED_PRACTICE")
         gateway.disconnect()
         self.assertEqual(gateway.state, "DISCONNECTED")
 
@@ -120,7 +120,7 @@ class PracticeGatewayTests(unittest.TestCase):
         self.assertEqual(clients[0].api.closed, 1)
         self.assertEqual(gateway.state, "DISCONNECTED")
         gateway.connect_readonly("user", "secret")
-        self.assertEqual(gateway.state, "CONNECTED_READ_ONLY")
+        self.assertEqual(gateway.state, "CONNECTED_PRACTICE")
 
     def test_force_reconnect_recovers_clean_error_state(self):
         gateway = PracticeReadOnlyGateway(
