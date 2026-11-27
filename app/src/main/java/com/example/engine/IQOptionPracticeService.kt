@@ -33,6 +33,27 @@ class IQOptionPracticeService(context: Context) {
         parseResult(bridge.connectPracticeReadOnly(email, password))
     }
 
+    suspend fun forceReconnect(
+        email: String,
+        password: String,
+        rememberCredentials: Boolean = false
+    ): PracticeConnectionResult = withContext(Dispatchers.IO) {
+        require(email.isNotBlank()) { "Email is required." }
+        require(password.isNotEmpty()) { "Password is required." }
+        if (rememberCredentials) vault.saveBrokerCredentials(email, password)
+        else vault.clearBrokerCredentials()
+
+        val reset = JSONObject(bridge.forceReconnectIqOption())
+        if (!reset.optBoolean("ok", false)) {
+            return@withContext PracticeConnectionResult(
+                ok = false,
+                state = reset.optString("state", "ERROR"),
+                error = reset.optString("error", "Could not reset this device session.")
+            )
+        }
+        parseResult(bridge.connectPracticeReadOnly(email, password))
+    }
+
     suspend fun disconnect(): PracticeConnectionResult = withContext(Dispatchers.IO) {
         parseResult(bridge.disconnectIqOption())
     }
