@@ -910,6 +910,7 @@ class TestPurePythonEngines(unittest.TestCase):
                 eurusd = next(item for item in catalog["items"] if item["symbol"] == "EURUSD")
                 self.assertEqual(eurusd["status"], "OPEN")
                 self.assertEqual(eurusd["payout_percent"], 87.0)
+                self.assertEqual(eurusd["rank"], 1)
 
                 candles = await connector.get_candles("EUR/USD", "1m", limit=30)
                 self.assertEqual(len(candles), 30)
