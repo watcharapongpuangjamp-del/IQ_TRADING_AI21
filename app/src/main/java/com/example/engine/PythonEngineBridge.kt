@@ -37,6 +37,9 @@ class PythonEngineBridge(context: Context) {
             .callAttr("connect_practice_readonly_json", email, password).toString()
     }
 
+    fun forceReconnectIqOption(): String =
+        python().getModule("iq_engine.iqair_adapter").callAttr("force_reconnect_json").toString()
+
     fun disconnectIqOption(): String =
         python().getModule("iq_engine.iqair_adapter").callAttr("disconnect_json").toString()
 
