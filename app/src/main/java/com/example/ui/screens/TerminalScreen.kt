@@ -345,12 +345,27 @@ fun TerminalScreen(
                 ) {
                     SUPPORTED_INSTRUMENTS.forEach { spec ->
                         val selected = spec.symbol == terminalState.selectedInstrument
+                        val normalizedSymbol = spec.symbol.replace("/", "").uppercase()
+                        val brokerItems = terminalState.assetCatalog.filter {
+                            it.symbol.replace("/", "").uppercase() == normalizedSymbol &&
+                                it.productType in setOf("TURBO", "BINARY")
+                        }
+                        val brokerAssetOpen = brokerItems.any { it.status == "OPEN" }
+                        val payoutLabel = if (terminalState.accountMode == "PRACTICE") {
+                            brokerItems.joinToString(" / ") { item ->
+                                "${item.productType}: ${item.payoutPercent?.let { "${it.toInt()}%" } ?: "N/A"}"
+                            }.ifBlank { "BROKER N/A" }
+                        } else {
+                            "SIM est. ${(spec.payoutRate * 100).toInt()}%"
+                        }
                         FilterChip(
                             selected = selected,
+                            enabled = terminalState.accountMode != "PRACTICE" ||
+                                (terminalState.sessionVerified && brokerAssetOpen),
                             onClick = { onSelectInstrument(spec.symbol) },
                             label = {
                                 Text(
-                                    text = "${spec.symbol} (${(spec.payoutRate * 100).toInt()}%)",
+                                    text = "${spec.symbol} • $payoutLabel",
                                     style = MaterialTheme.typography.labelMedium
                                 )
                             },
