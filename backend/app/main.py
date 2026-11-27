@@ -43,6 +43,8 @@ from app.models import LatencySampleModel, ModelRegistryModel, OrderRecordModel,
 from app.repositories.historical_candles import HistoricalCandleRepository
 from app.schemas import (
     AssetCatalogResponse,
+    IQOptionConnectRequest,
+    IQOptionConnectResponse,
     BacktestRunRequest,
     BacktestRunResponse,
     BrokerDryRunRequest,
@@ -126,8 +128,13 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         ensure_schema_migrations(engine)
-        if settings.broker_adapter.strip().lower() in {"http", "iqoption"}:
+        if settings.broker_adapter.strip().lower() == "http":
             await connector.connect()
+        elif settings.broker_adapter.strip().lower() == "iqoption":
+            # Login is user-initiated from the Android Practice connector panel.
+            # Do not fail backend startup when credentials are intentionally absent.
+            if settings.iqoption_email and settings.iqoption_password:
+                await connector.connect()
         db = SessionLocal()
         try:
             seed_initial_records(db)
@@ -198,6 +205,54 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
                     db_session.rollback()
                 finally:
                     db_generator.close()
+
+    @application.post(
+        "/api/v1/iqoption/connect",
+        response_model=IQOptionConnectResponse,
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["IQ Option Practice"],
+    )
+    async def connect_iqoption_practice(payload: IQOptionConnectRequest) -> IQOptionConnectResponse:
+        if not isinstance(connector, IQOptionBrokerConnector):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Backend broker_adapter must be set to 'iqoption' before Practice login.",
+            )
+        try:
+            await connector.connect_with_credentials(payload.email, payload.password)
+            balance = await connector.get_balance()
+            return IQOptionConnectResponse(
+                connected=True,
+                account_mode="PRACTICE",
+                session_verified=True,
+                balance=balance,
+                connector=connector.name,
+                real_account_locked=True,
+                live_authorized=False,
+            )
+        except Exception as exc:
+            # Do not echo credentials or authentication payloads in API errors.
+            await connector.disconnect()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"IQ Option Practice login/verification failed: {type(exc).__name__}",
+            ) from exc
+
+    @application.post(
+        "/api/v1/iqoption/disconnect",
+        dependencies=[Depends(verify_bearer_token)],
+        tags=["IQ Option Practice"],
+    )
+    async def disconnect_iqoption_practice() -> Dict[str, object]:
+        if isinstance(connector, IQOptionBrokerConnector):
+            await connector.disconnect()
+        return {
+            "connected": False,
+            "account_mode": "DISCONNECTED",
+            "session_verified": False,
+            "real_account_locked": True,
+            "live_authorized": False,
+        }
 
     @application.get(
         "/api/v1/connection/status",
