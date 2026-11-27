@@ -208,7 +208,8 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         connected_flag = bool(connector.connected)
         verified = bool(getattr(connector, "session_verified", connected_flag))
         if isinstance(connector, SimulationConnector):
-            # Internal simulation is not a verified broker session.
+            # Internal simulation is not a broker connection.
+            connected_flag = False
             verified = False
         broker_mode = getattr(connector, "account_mode", None)
         if isinstance(connector, IQOptionBrokerConnector):
