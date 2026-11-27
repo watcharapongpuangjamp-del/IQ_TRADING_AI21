@@ -84,6 +84,7 @@ fun SettingsDocsScreen(
     practiceBusy: Boolean = false,
     onConnectPractice: (String, String, Boolean) -> Unit = { _, _, _ -> },
     onDisconnectPractice: () -> Unit = {},
+    onForceReconnectPractice: (String, String, Boolean) -> Unit = { _, _, _ -> },
     onClearSavedPracticeCredentials: () -> Unit = {},
     userProfile: UserProfile?,
     databaseStats: LocalDatabaseStats,
@@ -325,6 +326,32 @@ fun SettingsDocsScreen(
                             modifier = Modifier.testTag("iq_practice_disconnect")
                         ) { Text("Disconnect") }
                     }
+                    OutlinedButton(
+                        onClick = {
+                            onForceReconnectPractice(
+                                brokerEmail.trim(), brokerPassword, rememberBrokerCredentials
+                            )
+                        },
+                        enabled = !practiceBusy && brokerEmail.isNotBlank() &&
+                            brokerPassword.isNotEmpty() && selectedAccountType == AccountType.PRACTICE,
+                        modifier = Modifier.fillMaxWidth().testTag("iq_practice_force_reconnect")
+                    ) { Text("Force Reconnect • ออกจาก Session เดิมบนเครื่องนี้แล้วเชื่อมต่อใหม่") }
+
+                    Surface(
+                        color = tradingColors.warningContainer,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("iq_force_logout_other_devices_notice")
+                    ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Force Logout Other Devices", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "ยังไม่สามารถสั่งออกจากระบบอุปกรณ์อื่นได้ เพราะ API ที่เชื่อมต่ออยู่ไม่มีคำสั่งเพิกถอน Session ระยะไกล ฟังก์ชันนี้จะไม่แสดงผลว่าสำเร็จโดยไม่มีการยืนยันจากโบรกเกอร์",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
                     if (rememberBrokerCredentials) {
                         OutlinedButton(
                             onClick = onClearSavedPracticeCredentials,
