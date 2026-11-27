@@ -172,6 +172,8 @@ private fun LocalTradingShell(
     val selectedAccountType by viewModel.selectedAccountType.collectAsStateWithLifecycle()
     val practiceConnection by viewModel.practiceConnection.collectAsStateWithLifecycle()
     val practiceBusy by viewModel.practiceBusy.collectAsStateWithLifecycle()
+    val practiceTradeBusy by viewModel.practiceTradeBusy.collectAsStateWithLifecycle()
+    val lastPracticeTrade by viewModel.lastPracticeTrade.collectAsStateWithLifecycle()
     val backendHealth by viewModel.backendHealth.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
     val mlModels by viewModel.mlModels.collectAsStateWithLifecycle()
@@ -319,6 +321,11 @@ private fun LocalTradingShell(
                                 activeStrategy = activeStrategy,
                                 riskPolicy = riskPolicy,
                                 backendConnected = backendHealth.connected,
+                                practiceConnected = practiceConnection?.ok == true &&
+                                    practiceConnection?.accountType == "PRACTICE",
+                                practiceTradeBusy = practiceTradeBusy,
+                                lastPracticeTrade = lastPracticeTrade,
+                                onPracticeTrade = viewModel::executePracticeManualTrade,
                                 onSelectInstrument = viewModel::selectInstrument,
                                 onSelectTimeframe = viewModel::selectTimeframe,
                                 onToggleAutoTrade = viewModel::toggleAutoTrade,
