@@ -418,9 +418,19 @@ data class ModeSwitchRequestDto(
 @JsonClass(generateAdapter = true)
 data class TradingStateDto(
     val execution_mode: String = "SIMULATION",
+    val execution_mode_label: String = "Simulation",
+    val account_mode: String = "SIMULATION",
+    val account_display_label: String = "Simulation",
     val connector_name: String = "simulation",
-    val connector_connected: Boolean = true,
+    val connector_connected: Boolean = false,
+    val connection_state: String = "INTERNAL",
+    val session_verified: Boolean = false,
     val live_authorized: Boolean = false,
+    val real_account_locked: Boolean = true,
+    val operation_mode: String = "MANUAL",
+    val learning_status: String = "IDLE",
+    val training_status: String = "IDLE",
+    val backtest_status: String = "IDLE",
     val balance: Double = 10000.0,
     val total_trades_today: Int = 0,
     val wins_today: Int = 0,
@@ -430,6 +440,33 @@ data class TradingStateDto(
     val emergency_stopped: Boolean = false,
     val win_rate_pct: Double = 0.0,
     val unresolved_orders_count: Int = 0
+)
+
+@JsonClass(generateAdapter = true)
+data class AssetCatalogItemDto(
+    val product_type: String = "UNKNOWN",
+    val product_label: String = "Unknown",
+    val symbol: String = "",
+    val display_name: String = "",
+    val is_open: Boolean? = null,
+    val status: String = "UNKNOWN",
+    val payout_rate: Double? = null,
+    val payout_percent: Double? = null,
+    val min_stake: Double? = null,
+    val max_stake: Double? = null,
+    val leverage: Double? = null,
+    val source: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class AssetCatalogResponseDto(
+    val account_mode: String = "UNSUPPORTED",
+    val connector: String = "",
+    val source: String = "",
+    val supported_product_types: List<String> = emptyList(),
+    val unavailable_product_types: List<String> = emptyList(),
+    val items: List<AssetCatalogItemDto> = emptyList(),
+    val fetched_at: Long = 0L
 )
 
 @JsonClass(generateAdapter = true)
