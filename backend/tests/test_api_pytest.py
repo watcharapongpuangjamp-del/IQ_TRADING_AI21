@@ -392,7 +392,7 @@ def test_unknown_timeout_never_resubmits_and_blocks_new_orders_until_reconciled(
             "idempotency_key": "idem-after-reconcile-003",
         },
     )
-    assert next_order.status_code == 200
+    assert next_order.status_code == 200, next_order.text
     assert next_order.json()["lifecycle_state"] == "SETTLED"
 
 
